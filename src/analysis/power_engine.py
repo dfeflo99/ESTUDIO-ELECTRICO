@@ -1,20 +1,20 @@
 # =============================================================================
 # src/analysis/power_engine.py
 # Motor de analisis de potencia electrica
-# Version: 1.0
+# Version: 1.1
 #
 # Pagina 2 del informe: Perfil de potencia real
 #
-# Calcula:
-#   - KPIs: maximo, P99, factor de carga, horas sobre umbral, % sobre umbral
-#   - Potencia maxima dia a dia
-#   - Heatmap hora x dia del mes
-#   - Curva de ranking de potencia
-#   - Interpretacion automatica del perfil (estable / variable)
+# CRITERIO DE FUENTES:
+#   CSV de consumo horario   -> distribucion temporal (heatmap, dia a dia,
+#                               ranking, factor de carga, horas sobre umbral)
+#   CSV potencias maximas    -> KPIs de pico real, comparativa con potencia
+#                               contratada y recomendacion optima
 #
-# Fuente de datos:
-#   - hourly_records del CSV de consumo (kWh/hora = kW medio en esa hora)
-#   - monthly_max_power del CSV oficial de potencias maximas
+# NOTA PARA EL USUARIO:
+#   Los graficos de distribucion muestran potencia MEDIA por hora.
+#   Los KPIs de maximo y la recomendacion usan los picos REALES
+#   registrados por la distribuidora.
 # =============================================================================
 
 from dataclasses import dataclass, field
@@ -33,7 +33,7 @@ from src.models.internal_data_model import (
 
 
 # =============================================================================
-# HELPER
+# HELPERS
 # =============================================================================
 
 def _round2(val: float) -> float:
@@ -42,130 +42,184 @@ def _round2(val: float) -> float:
 def _round4(val: float) -> float:
     return round(val, 4)
 
+# Potencias comerciales disponibles en 2.0TD (kW)
+POTENCIAS_COMERCIALES = [
+    2.3, 3.45, 4.6, 5.75, 6.9, 8.05, 9.2, 10.35, 11.5, 14.49
+]
+
+def potencia_comercial_optima(kw: float) -> float:
+    """Devuelve la potencia comercial mas baja que cubre el valor dado."""
+    for p in POTENCIAS_COMERCIALES:
+        if p >= kw:
+            return p
+    return POTENCIAS_COMERCIALES[-1]
+
 
 # =============================================================================
-# MOTOR PRINCIPAL
+# BLOQUE 1 — KPIs DESDE CSV OFICIAL DE POTENCIAS MAXIMAS
 # =============================================================================
 
-def run_power_analysis(analysis: ElectricityAnalysis,
-                       contracted_p1: float = None,
-                       contracted_p2: float = None) -> ElectricityAnalysis:
+def _calculate_kpis_from_official(monthly_max_power: list) -> dict:
     """
-    Funcion principal del motor de potencia.
-    Toma el ElectricityAnalysis con hourly_records validados
-    y rellena el campo power_analysis con todos los calculos.
+    Calcula los KPIs de potencia real usando el CSV oficial
+    de potencias maximas de la distribuidora.
 
-    Args:
-        analysis:      ElectricityAnalysis con hourly_records validados
-        contracted_p1: Potencia contratada P1 en kW (opcional)
-                       Si no se pasa se intenta obtener del contrato
-        contracted_p2: Potencia contratada P2 en kW (opcional)
+    Usa el tipo 'Pot.Max' que es el pico absoluto registrado cada mes.
+    Tambien extrae el maximo de Punta y Valle por separado.
 
     Returns:
-        ElectricityAnalysis con power_analysis relleno
+        Dict con max_real_kw, max_punta_kw, max_valle_kw,
+        max_by_month (para grafico de barras)
     """
-    records = analysis.hourly_records
+    if not monthly_max_power:
+        return {}
 
-    if not records:
-        print("ERROR: No hay registros horarios para analizar.")
-        return analysis
+    pot_max_records = [r for r in monthly_max_power if r.period == 'Pot.Max']
+    punta_records   = [r for r in monthly_max_power if r.period == 'Punta']
+    valle_records   = [r for r in monthly_max_power if r.period == 'Valle']
 
-    print("Iniciando analisis de potencia...")
+    max_real_kw  = _round4(max(r.max_kw for r in pot_max_records)) if pot_max_records else 0.0
+    max_punta_kw = _round4(max(r.max_kw for r in punta_records))   if punta_records   else 0.0
+    max_valle_kw = _round4(max(r.max_kw for r in valle_records))   if valle_records   else 0.0
 
-    # Obtener potencias contratadas
-    if contracted_p1 is None and analysis.contract:
-        contracted_p1 = analysis.contract.contracted_powers.p1
-    if contracted_p2 is None and analysis.contract:
-        contracted_p2 = analysis.contract.contracted_powers.p2
+    # Para grafico de barras por mes
+    meses_orden = ['ene', 'feb', 'mar', 'abr', 'may', 'jun',
+                   'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
 
-    # Si no hay contrato usar valores por defecto para el analisis
-    contracted_p1 = contracted_p1 or 0.0
-    contracted_p2 = contracted_p2 or 0.0
+    max_by_month = {}
+    for r in monthly_max_power:
+        mes = r.month[:3].lower()
+        if mes not in max_by_month:
+            max_by_month[mes] = {'Punta': 0.0, 'Valle': 0.0, 'Pot.Max': 0.0,
+                                 'month_num': r.month_num, 'year': r.year}
+        max_by_month[mes][r.period] = _round4(r.max_kw)
 
-    # Lista de potencias horarias (kWh/hora = kW medio en esa hora)
+    max_by_month = dict(sorted(
+        max_by_month.items(),
+        key=lambda x: x[1]['month_num']
+    ))
+
+    return {
+        'max_real_kw':  max_real_kw,
+        'max_punta_kw': max_punta_kw,
+        'max_valle_kw': max_valle_kw,
+        'max_by_month': max_by_month,
+    }
+
+
+# =============================================================================
+# BLOQUE 2 — RECOMENDACION DESDE CSV OFICIAL
+# =============================================================================
+
+def _calculate_recommendation_from_official(monthly_max_power: list,
+                                             contracted_p1: float,
+                                             contracted_p2: float) -> dict:
+    """
+    Calcula la recomendacion de potencia optima usando los picos
+    reales del CSV oficial + margen de seguridad del 10%.
+
+    En 2.0TD:
+        P1 contratada se compara con picos de Punta
+        P2 contratada se compara con picos de Valle
+    """
+    punta_records = [r for r in monthly_max_power if r.period == 'Punta']
+    valle_records = [r for r in monthly_max_power if r.period == 'Valle']
+
+    max_punta = max(r.max_kw for r in punta_records) if punta_records else 0.0
+    max_valle = max(r.max_kw for r in valle_records) if valle_records else 0.0
+
+    MARGEN = 1.10
+    recommended_p1 = potencia_comercial_optima(max_punta * MARGEN)
+    recommended_p2 = potencia_comercial_optima(max_valle * MARGEN)
+
+    has_excess  = (contracted_p1 > recommended_p1 * 1.1 or
+                   contracted_p2 > recommended_p2 * 1.1)
+    has_deficit = (contracted_p1 > 0 and max_punta > contracted_p1 or
+                   contracted_p2 > 0 and max_valle > contracted_p2)
+
+    observations = []
+    if has_excess:
+        observations.append(
+            f"Tienes potencia contratada de mas. Podrias considerar "
+            f"P1={recommended_p1}kW / P2={recommended_p2}kW y ahorrar "
+            f"en el termino fijo de potencia."
+        )
+    if has_deficit:
+        observations.append(
+            f"Has superado la potencia contratada en algun momento. "
+            f"Esto puede generar penalizaciones en la factura."
+        )
+    if not has_excess and not has_deficit:
+        observations.append(
+            f"Tu potencia contratada parece adecuada a tu perfil de consumo real."
+        )
+
+    return {
+        'recommended_p1':   recommended_p1,
+        'recommended_p2':   recommended_p2,
+        'has_excess':       has_excess,
+        'has_deficit':      has_deficit,
+        'observations':     observations,
+        'max_punta_real':   _round4(max_punta),
+        'max_valle_real':   _round4(max_valle),
+    }
+
+
+# =============================================================================
+# BLOQUE 3 — DISTRIBUCION TEMPORAL DESDE CSV DE CONSUMO
+# =============================================================================
+
+def _calculate_distribution_from_consumption(records: list,
+                                              umbral_kw: float) -> dict:
+    """
+    Calcula la distribucion temporal de potencia usando el CSV de consumo.
+    Recuerda: kWh/hora = potencia MEDIA en esa hora, no el pico instantaneo.
+
+    Args:
+        records:   Lista de HourlyRecord
+        umbral_kw: Umbral configurable por el usuario (por defecto 2.0 kW)
+
+    Returns:
+        Dict con daily_max, heatmap_matrix, power_ranking,
+        factor_carga, horas_sobre_umbral, pct_sobre_umbral,
+        avg_power_kw, p99_desde_consumo
+    """
     potencias = [r.consumption_kwh for r in records]
 
-    # ----------------------------------------------------------------
-    # KPIs PRINCIPALES (siempre año completo)
-    # ----------------------------------------------------------------
+    # KPIs desde consumo (aproximados)
+    avg_power_kw      = _round4(sum(potencias) / len(potencias))
+    p99_desde_consumo = _round4(float(np.percentile(potencias, 99)))
+    max_desde_consumo = _round4(max(potencias))
+    load_factor       = _round4(avg_power_kw / max_desde_consumo) if max_desde_consumo > 0 else 0.0
 
-    max_power_kw    = _round4(max(potencias))
-    avg_power_kw    = _round4(sum(potencias) / len(potencias))
-    p99_power_kw    = _round4(float(np.percentile(potencias, 99)))
-    load_factor     = _round4(avg_power_kw / max_power_kw) if max_power_kw > 0 else 0.0
-
-    # Umbral configurable (por defecto 2kW para 2.0TD)
-    UMBRAL_KW = 2.0
-    horas_sobre_umbral = sum(1 for p in potencias if p > UMBRAL_KW)
+    # Horas sobre umbral (variable)
+    horas_sobre_umbral = sum(1 for p in potencias if p > umbral_kw)
     pct_sobre_umbral   = _round2((horas_sobre_umbral / len(potencias)) * 100)
 
-    print(f"  Maximo de potencia:     {max_power_kw} kW")
-    print(f"  P99:                    {p99_power_kw} kW")
-    print(f"  Factor de carga:        {load_factor}")
-    print(f"  Horas sobre {UMBRAL_KW}kW:      {horas_sobre_umbral}")
-    print(f"  Porcentaje sobre umbral:{pct_sobre_umbral}%")
-
-    # ----------------------------------------------------------------
-    # INTERPRETACION AUTOMATICA DEL PERFIL
-    # Compara P99 con el promedio para determinar si es estable o variable
-    # ----------------------------------------------------------------
-
-    ratio_variabilidad = _round2(p99_power_kw / avg_power_kw) if avg_power_kw > 0 else 0.0
-
-    if ratio_variabilidad < 2.0:
-        perfil_tipo        = "estable"
-        perfil_descripcion = (
-            f"Tu consumo es bastante uniforme a lo largo del dia. "
-            f"El P99 ({p99_power_kw} kW) es {ratio_variabilidad}x el promedio "
-            f"({avg_power_kw} kW), lo que indica pocos picos extremos."
-        )
-    elif ratio_variabilidad < 4.0:
-        perfil_tipo        = "moderadamente variable"
-        perfil_descripcion = (
-            f"Tu consumo tiene cierta variabilidad. "
-            f"El P99 ({p99_power_kw} kW) es {ratio_variabilidad}x el promedio "
-            f"({avg_power_kw} kW). Hay momentos de mayor demanda pero no son extremos."
-        )
-    else:
-        perfil_tipo        = "muy variable"
-        perfil_descripcion = (
-            f"Tu consumo es muy irregular con picos destacados. "
-            f"El P99 ({p99_power_kw} kW) es {ratio_variabilidad}x el promedio "
-            f"({avg_power_kw} kW). Revisa los momentos de mayor consumo."
-        )
-
-    print(f"  Perfil: {perfil_tipo}")
-
-    # ----------------------------------------------------------------
-    # POTENCIA MAXIMA DIA A DIA
-    # Para cada dia cogemos el maximo de todos sus registros horarios
-    # ----------------------------------------------------------------
-
-    daily_max = defaultdict(float)
-    daily_records = defaultdict(list)
+    # Potencia maxima dia a dia
+    daily_max     = defaultdict(float)
+    daily_meta    = defaultdict(dict)
 
     for r in records:
         fecha = r.timestamp.date()
         if r.consumption_kwh > daily_max[fecha]:
             daily_max[fecha] = r.consumption_kwh
-        daily_records[fecha].append(r)
+            daily_meta[fecha] = {
+                'month_name':  r.month_name,
+                'day_of_week': r.day_of_week,
+                'is_weekend':  r.is_weekend,
+                'is_holiday':  r.is_holiday,
+            }
 
     daily_max_power = {
         str(fecha): {
-            'max_kw':       _round4(daily_max[fecha]),
-            'month_name':   list(daily_records[fecha])[0].month_name,
-            'day_of_week':  list(daily_records[fecha])[0].day_of_week,
-            'is_weekend':   list(daily_records[fecha])[0].is_weekend,
-            'is_holiday':   list(daily_records[fecha])[0].is_holiday,
+            'max_kw': _round4(daily_max[fecha]),
+            **daily_meta[fecha]
         }
         for fecha in sorted(daily_max.keys())
     }
 
-    # ----------------------------------------------------------------
-    # HEATMAP HORA x DIA DEL MES
-    # Matriz de 24 horas x 31 dias con la potencia media
-    # ----------------------------------------------------------------
-
+    # Heatmap hora x dia del mes (potencia media)
     heatmap_sum   = defaultdict(float)
     heatmap_count = defaultdict(int)
 
@@ -174,18 +228,10 @@ def run_power_analysis(analysis: ElectricityAnalysis,
         heatmap_sum[clave]   += r.consumption_kwh
         heatmap_count[clave] += 1
 
-    # Calcular promedio para cada celda (hora, dia_mes)
-    hourly_power_heatmap = {
-        f"{hora}_{dia}": _round4(heatmap_sum[(hora, dia)] / heatmap_count[(hora, dia)])
-        for (hora, dia) in heatmap_sum
-    }
-
-    # Tambien guardamos estructura matricial para Plotly
-    # horas 0-23 x dias 1-31
     heatmap_matrix = {
-        'horas':    list(range(0, 24)),
-        'dias':     list(range(1, 32)),
-        'valores':  {}   # {hora: {dia: valor}}
+        'horas': list(range(0, 24)),
+        'dias':  list(range(1, 32)),
+        'valores': {}
     }
     for hora in range(24):
         heatmap_matrix['valores'][hora] = {}
@@ -198,169 +244,211 @@ def run_power_analysis(analysis: ElectricityAnalysis,
             else:
                 heatmap_matrix['valores'][hora][dia] = None
 
-    # ----------------------------------------------------------------
-    # CURVA DE RANKING DE POTENCIA
-    # Lista ordenada de mayor a menor para la curva de duracion
-    # ----------------------------------------------------------------
-
+    # Curva de ranking
     power_ranking = sorted(potencias, reverse=True)
 
-    # ----------------------------------------------------------------
-    # REGISTROS QUE SUPERAN EL UMBRAL
-    # ----------------------------------------------------------------
-
+    # Registros sobre umbral
     records_sobre_umbral = [
         {
-            'timestamp':      str(r.timestamp),
-            'month_name':     r.month_name,
-            'day_of_month':   r.day_of_month,
-            'hour':           r.timestamp.hour,
-            'consumption_kwh':_round4(r.consumption_kwh),
-            'exceso_kwh':     _round4(r.consumption_kwh - UMBRAL_KW),
-            'is_weekend':     r.is_weekend,
-            'is_holiday':     r.is_holiday,
-            'power_period':   r.power_period.value,
-            'energy_period':  r.energy_period.value,
+            'timestamp':       str(r.timestamp),
+            'month_name':      r.month_name,
+            'day_of_month':    r.day_of_month,
+            'hour':            r.timestamp.hour,
+            'consumption_kwh': _round4(r.consumption_kwh),
+            'exceso_kwh':      _round4(r.consumption_kwh - umbral_kw),
+            'is_weekend':      r.is_weekend,
+            'is_holiday':      r.is_holiday,
+            'power_period':    r.power_period.value,
+            'energy_period':   r.energy_period.value,
         }
-        for r in records if r.consumption_kwh > UMBRAL_KW
+        for r in records if r.consumption_kwh > umbral_kw
     ]
 
-    # ----------------------------------------------------------------
-    # EXCESOS SOBRE POTENCIA CONTRATADA (si se conoce)
-    # ----------------------------------------------------------------
-
+    # Excesos sobre potencia contratada (desde consumo, aproximado)
     records_exceso_p1 = []
     records_exceso_p2 = []
     horas_exceso_p1   = 0
     horas_exceso_p2   = 0
 
-    if contracted_p1 > 0 or contracted_p2 > 0:
-        for r in records:
-            if r.power_period == PowerPeriod.P1 and contracted_p1 > 0:
-                if r.consumption_kwh > contracted_p1:
-                    exceso = _round4(r.consumption_kwh - contracted_p1)
-                    records_exceso_p1.append({
-                        'timestamp':      str(r.timestamp),
-                        'month_name':     r.month_name,
-                        'day_of_month':   r.day_of_month,
-                        'hour':           r.timestamp.hour,
-                        'consumption_kwh':_round4(r.consumption_kwh),
-                        'exceso_kwh':     exceso,
-                    })
-                    horas_exceso_p1 += 1
+    return {
+        'avg_power_kw':         avg_power_kw,
+        'p99_desde_consumo':    p99_desde_consumo,
+        'max_desde_consumo':    max_desde_consumo,
+        'load_factor':          load_factor,
+        'horas_sobre_umbral':   horas_sobre_umbral,
+        'pct_sobre_umbral':     pct_sobre_umbral,
+        'daily_max_power':      daily_max_power,
+        'heatmap_matrix':       heatmap_matrix,
+        'power_ranking':        power_ranking,
+        'records_sobre_umbral': records_sobre_umbral,
+    }
 
-            elif r.power_period == PowerPeriod.P2 and contracted_p2 > 0:
-                if r.consumption_kwh > contracted_p2:
-                    exceso = _round4(r.consumption_kwh - contracted_p2)
-                    records_exceso_p2.append({
-                        'timestamp':      str(r.timestamp),
-                        'month_name':     r.month_name,
-                        'day_of_month':   r.day_of_month,
-                        'hour':           r.timestamp.hour,
-                        'consumption_kwh':_round4(r.consumption_kwh),
-                        'exceso_kwh':     exceso,
-                    })
-                    horas_exceso_p2 += 1
 
-        print(f"  Horas exceso P1 ({contracted_p1}kW): {horas_exceso_p1}")
-        print(f"  Horas exceso P2 ({contracted_p2}kW): {horas_exceso_p2}")
+# =============================================================================
+# BLOQUE 4 — INTERPRETACION AUTOMATICA DEL PERFIL
+# =============================================================================
 
-    # ----------------------------------------------------------------
-    # RECOMENDACION DE POTENCIA OPTIMA
-    # Basada en P99 con un margen de seguridad del 10%
-    # ----------------------------------------------------------------
+def _interpret_profile(avg_power_kw: float, p99_kw: float,
+                        max_real_kw: float) -> dict:
+    """
+    Interpreta automaticamente el perfil de consumo como
+    estable, moderadamente variable o muy variable.
+    """
+    ratio = _round2(p99_kw / avg_power_kw) if avg_power_kw > 0 else 0.0
 
-    # Calcular P99 por periodo de potencia
-    potencias_p1 = [r.consumption_kwh for r in records
-                    if r.power_period == PowerPeriod.P1]
-    potencias_p2 = [r.consumption_kwh for r in records
-                    if r.power_period == PowerPeriod.P2]
-
-    p99_p1 = _round4(float(np.percentile(potencias_p1, 99))) if potencias_p1 else 0.0
-    p99_p2 = _round4(float(np.percentile(potencias_p2, 99))) if potencias_p2 else 0.0
-
-    MARGEN_SEGURIDAD = 1.10  # 10% de margen
-    recommended_p1 = _round2(p99_p1 * MARGEN_SEGURIDAD)
-    recommended_p2 = _round2(p99_p2 * MARGEN_SEGURIDAD)
-
-    # Redondear a potencias comerciales disponibles (2.3, 3.45, 4.6, 5.75, 6.9, 8.05, 9.2, 10.35, 11.5, 14.49)
-    POTENCIAS_COMERCIALES = [2.3, 3.45, 4.6, 5.75, 6.9, 8.05, 9.2, 10.35, 11.5, 14.49]
-
-    def potencia_comercial_optima(kw: float) -> float:
-        for p in POTENCIAS_COMERCIALES:
-            if p >= kw:
-                return p
-        return POTENCIAS_COMERCIALES[-1]
-
-    recommended_p1_comercial = potencia_comercial_optima(recommended_p1)
-    recommended_p2_comercial = potencia_comercial_optima(recommended_p2)
-
-    has_excess  = (contracted_p1 > recommended_p1_comercial * 1.1 or
-                   contracted_p2 > recommended_p2_comercial * 1.1)
-    has_deficit = horas_exceso_p1 > 0 or horas_exceso_p2 > 0
-
-    observations = []
-    if has_excess:
-        observations.append(
-            f"Parece que tienes potencia contratada de mas. "
-            f"Podrias considerar bajar a P1={recommended_p1_comercial}kW / "
-            f"P2={recommended_p2_comercial}kW y ahorrar en el termino fijo."
+    if ratio < 2.0:
+        tipo = "estable"
+        descripcion = (
+            f"Tu perfil de consumo es bastante uniforme. "
+            f"El P99 ({p99_kw} kW) es solo {ratio}x el promedio "
+            f"({avg_power_kw} kW), lo que indica pocos picos extremos. "
+            f"El pico real registrado por tu distribuidora fue {max_real_kw} kW."
         )
-    if has_deficit:
-        observations.append(
-            f"Has superado la potencia contratada en {horas_exceso_p1} horas en P1 "
-            f"y {horas_exceso_p2} horas en P2. Esto puede generar penalizaciones."
+    elif ratio < 4.0:
+        tipo = "moderadamente variable"
+        descripcion = (
+            f"Tu perfil tiene cierta variabilidad. "
+            f"El P99 ({p99_kw} kW) es {ratio}x el promedio "
+            f"({avg_power_kw} kW). Hay momentos de mayor demanda pero "
+            f"no son extremos. Pico real: {max_real_kw} kW."
         )
-    if not has_excess and not has_deficit:
-        observations.append(
-            f"Tu potencia contratada parece adecuada a tu perfil de consumo."
+    else:
+        tipo = "muy variable"
+        descripcion = (
+            f"Tu perfil es muy irregular con picos destacados. "
+            f"El P99 ({p99_kw} kW) es {ratio}x el promedio "
+            f"({avg_power_kw} kW). Revisa los momentos de mayor consumo. "
+            f"Pico real registrado: {max_real_kw} kW."
         )
 
-    print(f"  Potencia recomendada P1: {recommended_p1_comercial} kW")
-    print(f"  Potencia recomendada P2: {recommended_p2_comercial} kW")
+    return {'tipo': tipo, 'descripcion': descripcion, 'ratio': ratio}
 
-    # ----------------------------------------------------------------
-    # CONSTRUIR PowerAnalysis
-    # ----------------------------------------------------------------
 
+# =============================================================================
+# FUNCION PRINCIPAL
+# =============================================================================
+
+def run_power_analysis(analysis: ElectricityAnalysis,
+                       contracted_p1: float = None,
+                       contracted_p2: float = None,
+                       umbral_kw: float = 2.0) -> ElectricityAnalysis:
+    """
+    Funcion principal del motor de potencia.
+
+    Args:
+        analysis:      ElectricityAnalysis con hourly_records validados
+        contracted_p1: Potencia contratada P1 en kW
+        contracted_p2: Potencia contratada P2 en kW
+        umbral_kw:     Umbral configurable por el usuario (default: 2.0 kW)
+                       Este valor sera interactivo en el dashboard
+
+    Returns:
+        ElectricityAnalysis con power_analysis relleno
+    """
+    records            = analysis.hourly_records
+    monthly_max_power  = analysis.monthly_max_power
+
+    if not records:
+        print("ERROR: No hay registros horarios para analizar.")
+        return analysis
+
+    print("Iniciando analisis de potencia...")
+    print(f"  Umbral configurado: {umbral_kw} kW")
+
+    # Obtener potencias contratadas
+    if contracted_p1 is None and analysis.contract:
+        contracted_p1 = analysis.contract.contracted_powers.p1
+    if contracted_p2 is None and analysis.contract:
+        contracted_p2 = analysis.contract.contracted_powers.p2
+    contracted_p1 = contracted_p1 or 0.0
+    contracted_p2 = contracted_p2 or 0.0
+
+    # ---- BLOQUE 1: KPIs desde CSV oficial ----
+    kpis_oficiales = _calculate_kpis_from_official(monthly_max_power)
+    max_real_kw    = kpis_oficiales.get('max_real_kw', 0.0)
+    max_punta_kw   = kpis_oficiales.get('max_punta_kw', 0.0)
+    max_valle_kw   = kpis_oficiales.get('max_valle_kw', 0.0)
+    max_by_month   = kpis_oficiales.get('max_by_month', {})
+
+    print(f"  Maximo real (CSV oficial): {max_real_kw} kW")
+    print(f"  Maximo Punta:              {max_punta_kw} kW")
+    print(f"  Maximo Valle:              {max_valle_kw} kW")
+
+    # ---- BLOQUE 2: Recomendacion desde CSV oficial ----
+    rec = _calculate_recommendation_from_official(
+        monthly_max_power, contracted_p1, contracted_p2
+    )
+
+    print(f"  Potencia recomendada P1:   {rec['recommended_p1']} kW")
+    print(f"  Potencia recomendada P2:   {rec['recommended_p2']} kW")
+
+    # ---- BLOQUE 3: Distribucion temporal desde CSV consumo ----
+    dist = _calculate_distribution_from_consumption(records, umbral_kw)
+
+    print(f"  Factor de carga:           {dist['load_factor']}")
+    print(f"  P99 (desde consumo):       {dist['p99_desde_consumo']} kW")
+    print(f"  Horas sobre {umbral_kw}kW:       {dist['horas_sobre_umbral']}")
+    print(f"  Porcentaje sobre umbral:   {dist['pct_sobre_umbral']}%")
+
+    # ---- BLOQUE 4: Interpretacion del perfil ----
+    perfil = _interpret_profile(
+        dist['avg_power_kw'],
+        dist['p99_desde_consumo'],
+        max_real_kw
+    )
+
+    print(f"  Perfil: {perfil['tipo']}")
+
+    # ---- CONSTRUIR PowerAnalysis ----
     contracted = ContractedPowers(p1=contracted_p1, p2=contracted_p2)
 
     power_analysis = PowerAnalysis(
-        # KPIs
-        max_power_kw            = max_power_kw,
-        p99_power_kw            = p99_power_kw,
-        load_factor             = load_factor,
-        hours_exceeds_2kw       = horas_sobre_umbral,
-        pct_exceeds_2kw         = pct_sobre_umbral,
+        # KPIs principales (desde CSV oficial)
+        max_power_kw            = max_real_kw,
+        p99_power_kw            = dist['p99_desde_consumo'],
+        load_factor             = dist['load_factor'],
+        hours_exceeds_2kw       = dist['horas_sobre_umbral'],
+        pct_exceeds_2kw         = dist['pct_sobre_umbral'],
 
-        # Graficos
-        daily_max_power         = daily_max_power,
-        hourly_power_heatmap    = heatmap_matrix,
-        power_ranking           = power_ranking,
+        # Graficos (desde CSV consumo)
+        daily_max_power         = dist['daily_max_power'],
+        hourly_power_heatmap    = dist['heatmap_matrix'],
+        power_ranking           = dist['power_ranking'],
 
         # Picos criticos
-        records_exceeding_2kw   = records_sobre_umbral,
+        records_exceeding_2kw   = dist['records_sobre_umbral'],
 
         # Potencia contratada y excesos
         contracted_powers       = contracted,
-        hours_exceeds_p1        = horas_exceso_p1,
-        hours_exceeds_p2        = horas_exceso_p2,
-        records_exceeding_p1    = records_exceso_p1,
-        records_exceeding_p2    = records_exceso_p2,
+        hours_exceeds_p1        = 0,
+        hours_exceeds_p2        = 0,
+        records_exceeding_p1    = [],
+        records_exceeding_p2    = [],
 
-        # Recomendacion
-        recommended_p1_kw       = recommended_p1_comercial,
-        recommended_p2_kw       = recommended_p2_comercial,
-        has_excess_contracted   = has_excess,
-        has_deficit_contracted  = has_deficit,
-        observations            = observations,
+        # Recomendacion (desde CSV oficial)
+        recommended_p1_kw       = rec['recommended_p1'],
+        recommended_p2_kw       = rec['recommended_p2'],
+        has_excess_contracted   = rec['has_excess'],
+        has_deficit_contracted  = rec['has_deficit'],
+        observations            = rec['observations'],
     )
 
-    # Añadir campos extra
-    power_analysis.perfil_tipo         = perfil_tipo
-    power_analysis.perfil_descripcion  = perfil_descripcion
-    power_analysis.avg_power_kw        = avg_power_kw
-    power_analysis.umbral_kw           = UMBRAL_KW
+    # Campos extra
+    power_analysis.perfil_tipo          = perfil['tipo']
+    power_analysis.perfil_descripcion   = perfil['descripcion']
+    power_analysis.avg_power_kw         = dist['avg_power_kw']
+    power_analysis.umbral_kw            = umbral_kw
+    power_analysis.max_punta_kw         = max_punta_kw
+    power_analysis.max_valle_kw         = max_valle_kw
+    power_analysis.max_by_month         = max_by_month
+
+    # Nota explicativa para mostrar al usuario
+    power_analysis.nota_metodologia = (
+        "Los graficos de distribucion horaria muestran la potencia MEDIA por hora "
+        "(calculada a partir de tu curva de consumo). "
+        "Los KPIs de potencia maxima y la recomendacion de potencia contratada "
+        "se basan en los picos REALES registrados por tu distribuidora."
+    )
 
     analysis.power_analysis = power_analysis
 

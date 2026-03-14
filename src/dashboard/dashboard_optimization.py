@@ -1,73 +1,55 @@
 # =============================================================================
 # src/dashboard/dashboard_optimization.py
-# Dashboard de optimizacion de potencia — Version 3.0
+# Dashboard de optimizacion de potencia — Version 3.1
+# Con boton de descarga PDF con parametros actuales
 # =============================================================================
 
 import dash
-from dash import dcc, html, Input, Output
+from dash import dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
+import tempfile
+import os
 
 import sys
 sys.path.append('../..')
 from src.models.internal_data_model import ElectricityAnalysis
 from src.analysis.optimization_engine import run_optimization_analysis, POTENCIAS_COMERCIALES
 from src.analysis.charts.optimization_charts import (
-    chart_optimization_kpis,
-    chart_monthly_peaks,
-    chart_exceso_table,
-    chart_suggested_options,
+    chart_optimization_kpis, chart_monthly_peaks,
+    chart_exceso_table, chart_suggested_options,
 )
+from src.reports.report_generator import generate_report
 
 COLORS = {
-    'primary':    '#2563EB',
-    'success':    '#10B981',
-    'background': '#F0F4FF',
-    'card':       '#FFFFFF',
-    'text':       '#1E293B',
-    'text_light': '#64748B',
-    'border':     '#E2E8F0',
+    'primary': '#2563EB', 'success': '#10B981', 'background': '#F0F4FF',
+    'card': '#FFFFFF', 'text': '#1E293B', 'text_light': '#64748B', 'border': '#E2E8F0',
 }
-
 CARD_STYLE = {
-    'backgroundColor': COLORS['card'],
-    'borderRadius':    '12px',
-    'padding':         '20px',
-    'marginBottom':    '20px',
-    'boxShadow':       '0 1px 4px rgba(0,0,0,0.08)',
-    'border':          f"1px solid {COLORS['border']}",
+    'backgroundColor': COLORS['card'], 'borderRadius': '12px', 'padding': '20px',
+    'marginBottom': '20px', 'boxShadow': '0 1px 4px rgba(0,0,0,0.08)',
+    'border': f"1px solid {COLORS['border']}",
 }
-
 TITLE_STYLE = {
-    'color':      COLORS['success'],
-    'fontFamily': 'Segoe UI, Arial, sans-serif',
-    'fontWeight': '700',
-    'fontSize':   '24px',
-    'margin':     '0',
+    'color': COLORS['success'], 'fontFamily': 'Segoe UI, Arial, sans-serif',
+    'fontWeight': '700', 'fontSize': '24px', 'margin': '0',
 }
-
 SUBTITLE_STYLE = {
-    'color':      COLORS['text_light'],
-    'fontFamily': 'Segoe UI, Arial, sans-serif',
-    'fontSize':   '14px',
-    'marginTop':  '4px',
+    'color': COLORS['text_light'], 'fontFamily': 'Segoe UI, Arial, sans-serif',
+    'fontSize': '14px', 'marginTop': '4px',
 }
-
 SECTION_TITLE_STYLE = {
-    'color':        COLORS['text'],
-    'fontFamily':   'Segoe UI, Arial, sans-serif',
-    'fontWeight':   '600',
-    'fontSize':     '16px',
-    'marginBottom': '12px',
-    'borderLeft':   f"4px solid {COLORS['success']}",
-    'paddingLeft':  '10px',
+    'color': COLORS['text'], 'fontFamily': 'Segoe UI, Arial, sans-serif',
+    'fontWeight': '600', 'fontSize': '16px', 'marginBottom': '12px',
+    'borderLeft': f"4px solid {COLORS['success']}", 'paddingLeft': '10px',
 }
-
 FILTER_LABEL_STYLE = {
-    'color':        COLORS['text'],
-    'fontFamily':   'Segoe UI, Arial, sans-serif',
-    'fontWeight':   '600',
-    'fontSize':     '13px',
-    'marginBottom': '8px',
+    'color': COLORS['text'], 'fontFamily': 'Segoe UI, Arial, sans-serif',
+    'fontWeight': '600', 'fontSize': '13px', 'marginBottom': '8px',
+}
+BTN_PDF_STYLE = {
+    'backgroundColor': '#CC1F1F', 'color': 'white', 'border': 'none',
+    'padding': '12px 32px', 'borderRadius': '8px', 'fontSize': '14px',
+    'fontFamily': 'Segoe UI, Arial, sans-serif', 'fontWeight': '600', 'cursor': 'pointer',
 }
 
 
@@ -75,50 +57,31 @@ def build_optimization_layout(analysis, contracted_p1=2.3, contracted_p2=2.3):
     opciones = [{'label': f"{p} kW", 'value': p} for p in POTENCIAS_COMERCIALES]
 
     return html.Div(
-        style={'backgroundColor': COLORS['background'],
-               'minHeight': '100vh', 'padding': '24px'},
+        style={'backgroundColor': COLORS['background'], 'minHeight': '100vh', 'padding': '24px'},
         children=[
 
             # Cabecera
-            html.Div(
-                style={**CARD_STYLE, 'display': 'flex',
-                       'justifyContent': 'space-between',
-                       'alignItems': 'center'},
+            html.Div(style={**CARD_STYLE, 'display': 'flex', 'justifyContent': 'space-between', 'alignItems': 'center'},
                 children=[html.Div([
                     html.H1('Optimizacion de Potencia Contratada', style=TITLE_STYLE),
-                    html.P(
-                        'Analisis de picos reales vs potencia contratada. '
-                        'Cambia la potencia actual para simular distintos escenarios.',
-                        style=SUBTITLE_STYLE
-                    ),
+                    html.P('Analisis de picos reales vs potencia contratada.', style=SUBTITLE_STYLE),
                 ])]
             ),
 
             # Controles
             html.Div(style=CARD_STYLE, children=[
                 html.P('Potencia contratada actual:', style=FILTER_LABEL_STYLE),
-                html.Div(
-                    style={'display': 'grid',
-                           'gridTemplateColumns': '1fr 1fr',
-                           'gap': '24px'},
+                html.Div(style={'display': 'grid', 'gridTemplateColumns': '1fr 1fr', 'gap': '24px'},
                     children=[
                         html.Div([
-                            html.P('P1 (kW) — Laborable 8h-24h:',
-                                   style=FILTER_LABEL_STYLE),
-                            dcc.Dropdown(
-                                id='opt-p1-dropdown', options=opciones,
-                                value=contracted_p1, clearable=False,
-                                style={'fontFamily': 'Segoe UI, Arial', 'fontSize': '14px'}
-                            ),
+                            html.P('P1 (kW) — Laborable 8h-24h:', style=FILTER_LABEL_STYLE),
+                            dcc.Dropdown(id='opt-p1-dropdown', options=opciones, value=contracted_p1, clearable=False,
+                                         style={'fontFamily': 'Segoe UI, Arial', 'fontSize': '14px'}),
                         ]),
                         html.Div([
-                            html.P('P2 (kW) — Nocturno / Finde:',
-                                   style=FILTER_LABEL_STYLE),
-                            dcc.Dropdown(
-                                id='opt-p2-dropdown', options=opciones,
-                                value=contracted_p2, clearable=False,
-                                style={'fontFamily': 'Segoe UI, Arial', 'fontSize': '14px'}
-                            ),
+                            html.P('P2 (kW) — Nocturno / Finde:', style=FILTER_LABEL_STYLE),
+                            dcc.Dropdown(id='opt-p2-dropdown', options=opciones, value=contracted_p2, clearable=False,
+                                         style={'fontFamily': 'Segoe UI, Arial', 'fontSize': '14px'}),
                         ]),
                     ]
                 ),
@@ -132,17 +95,13 @@ def build_optimization_layout(analysis, contracted_p1=2.3, contracted_p2=2.3):
 
             # Picos mensuales
             html.Div(style=CARD_STYLE, children=[
-                html.P('Picos Mensuales vs Potencia Contratada',
-                       style=SECTION_TITLE_STYLE),
-                html.P(
-                    'Rojo = mes que supera la potencia contratada. '
-                    'Azul = dentro del limite.',
-                    style={**SUBTITLE_STYLE, 'marginBottom': '12px'}
-                ),
+                html.P('Picos Mensuales vs Potencia Contratada', style=SECTION_TITLE_STYLE),
+                html.P('Rojo = supera la potencia contratada. Azul = dentro del limite.',
+                       style={**SUBTITLE_STYLE, 'marginBottom': '12px'}),
                 dcc.Graph(id='opt-picos', config={'displayModeBar': False}),
             ]),
 
-            # Tabla de excesos
+            # Tabla excesos
             html.Div(style=CARD_STYLE, children=[
                 html.P('Detalle de Meses con Exceso', style=SECTION_TITLE_STYLE),
                 dcc.Graph(id='opt-excesos', config={'displayModeBar': False}),
@@ -151,12 +110,17 @@ def build_optimization_layout(analysis, contracted_p1=2.3, contracted_p2=2.3):
             # Opciones sugeridas
             html.Div(style=CARD_STYLE, children=[
                 html.P('Opciones Sugeridas', style=SECTION_TITLE_STYLE),
-                html.P(
-                    'El sistema te presenta dos opciones. Tu decides segun '
-                    'tu tolerancia al riesgo y lo que quieras pagar.',
-                    style={**SUBTITLE_STYLE, 'marginBottom': '12px'}
-                ),
+                html.P('El sistema te presenta dos opciones. Tu decides segun tu tolerancia al riesgo.',
+                       style={**SUBTITLE_STYLE, 'marginBottom': '12px'}),
                 dcc.Graph(id='opt-opciones', config={'displayModeBar': False}),
+            ]),
+
+            # Boton descarga PDF
+            html.Div(style={**CARD_STYLE, 'textAlign': 'center', 'padding': '24px'}, children=[
+                html.P('Descarga el informe PDF con el estado actual del analisis.',
+                       style={**SUBTITLE_STYLE, 'marginBottom': '16px'}),
+                html.Button('Descargar Informe PDF', id='opt-btn-download-pdf', style=BTN_PDF_STYLE),
+                dcc.Download(id='opt-download-pdf'),
             ]),
 
         ]
@@ -167,37 +131,49 @@ def run_optimization_dashboard(analysis: ElectricityAnalysis,
                                 contracted_p1: float = 2.3,
                                 contracted_p2: float = 2.3,
                                 port: int = 8053):
-
     _analysis_global = analysis
 
-    app = dash.Dash(
-        __name__,
-        external_stylesheets=[dbc.themes.BOOTSTRAP],
-        title='Estudio Electrico — Optimizacion'
-    )
-
+    app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP], title='Estudio Electrico — Optimizacion')
     app.layout = build_optimization_layout(analysis, contracted_p1, contracted_p2)
 
     @app.callback(
-        Output('opt-kpis',    'figure'),
-        Output('opt-picos',   'figure'),
-        Output('opt-excesos', 'figure'),
-        Output('opt-opciones','figure'),
-        Input('opt-p1-dropdown', 'value'),
-        Input('opt-p2-dropdown', 'value'),
+        Output('opt-kpis', 'figure'), Output('opt-picos', 'figure'),
+        Output('opt-excesos', 'figure'), Output('opt-opciones', 'figure'),
+        Input('opt-p1-dropdown', 'value'), Input('opt-p2-dropdown', 'value'),
     )
     def update_charts(p1, p2):
         data = run_optimization_analysis(
             _analysis_global,
-            contracted_p1 = float(p1) if p1 else 2.3,
-            contracted_p2 = float(p2) if p2 else 2.3,
+            contracted_p1=float(p1) if p1 else 2.3,
+            contracted_p2=float(p2) if p2 else 2.3,
         )
         return (
-            chart_optimization_kpis(data),
-            chart_monthly_peaks(data),
-            chart_exceso_table(data),
-            chart_suggested_options(data),
+            chart_optimization_kpis(data), chart_monthly_peaks(data),
+            chart_exceso_table(data), chart_suggested_options(data),
         )
+
+    @app.callback(
+        Output('opt-download-pdf', 'data'),
+        Input('opt-btn-download-pdf', 'n_clicks'),
+        State('opt-p1-dropdown', 'value'),
+        State('opt-p2-dropdown', 'value'),
+        prevent_initial_call=True
+    )
+    def download_pdf(n_clicks, p1, p2):
+        pw = _analysis_global.power_analysis
+        params = {
+            'contracted_p1':  float(p1) if p1 else 2.3,
+            'contracted_p2':  float(p2) if p2 else 2.3,
+            'umbral_kw':      pw.umbral_kw if pw else 2.0,
+            'meses_filtro':   [],
+        }
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+            tmp_path = tmp.name
+        generate_report(_analysis_global, tmp_path, logo_path=None, params=params)
+        with open(tmp_path, 'rb') as f:
+            pdf_bytes = f.read()
+        os.unlink(tmp_path)
+        return dcc.send_bytes(pdf_bytes, 'informe_f2energy.pdf')
 
     print(f"Dashboard de optimizacion lanzado en http://localhost:{port}")
     app.run(debug=False, port=port)

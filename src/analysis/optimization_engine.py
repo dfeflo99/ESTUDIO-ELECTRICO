@@ -1,21 +1,24 @@
 # =============================================================================
 # src/analysis/optimization_engine.py
 # Motor de optimizacion de potencia contratada
-# Version: 1.0
+# Version: 1.1
 #
 # Pagina 4 del informe: Optimizacion de potencia contratada
 #
-# Calcula:
-#   - KPIs: potencia actual, recomendada, horas exceso P1/P2
-#   - Curva de horas superadas para cada potencia comercial
-#   - Tabla comparativa de opciones con nivel de riesgo
+# CRITERIO:
+#   No se da una "recomendacion automatica" unica.
+#   Se presentan dos "opciones sugeridas" con su explicacion:
+#     - Opcion equilibrada: primera potencia comercial que supera el P95
+#       del consumo horario con un 5% de margen
+#     - Opcion segura: primera potencia comercial que supera el maximo
+#       real del CSV oficial
+#   El cliente decide con informacion completa.
 #
 # Nota: No incluye calculos economicos (euros).
-#       El apartado economico se tratara en el estudio de factura.
 # =============================================================================
 
 from collections import defaultdict
-from typing import Optional
+import numpy as np
 
 import sys
 sys.path.append('..')
@@ -34,28 +37,22 @@ def _round2(val: float) -> float:
     return round(val, 2)
 
 def _nivel_riesgo(horas_exceso: int, total_horas: int) -> str:
-    """
-    Clasifica el nivel de riesgo segun el porcentaje de horas con exceso.
-        Seguro:    0 horas de exceso
-        Bajo:      < 0.1% de las horas
-        Moderado:  0.1% - 0.5%
-        Alto:      > 0.5%
-    """
     if horas_exceso == 0:
-        return 'Seguro'
+        return 'Ninguno'
     pct = (horas_exceso / total_horas) * 100
     if pct < 0.1:
-        return 'Bajo'
+        return 'Muy bajo'
     elif pct < 0.5:
+        return 'Bajo'
+    elif pct < 1.0:
         return 'Moderado'
     else:
         return 'Alto'
 
-def _potencia_recomendada_comercial(max_real: float) -> float:
-    """Devuelve la potencia comercial minima que cubre el maximo real + 10%."""
-    objetivo = max_real * 1.10
+def _primera_potencia_comercial_sobre(kw: float) -> float:
+    """Devuelve la primera potencia comercial estrictamente superior al valor dado."""
     for p in POTENCIAS_COMERCIALES:
-        if p >= objetivo:
+        if p >= kw:
             return p
     return POTENCIAS_COMERCIALES[-1]
 
@@ -98,34 +95,94 @@ def run_optimization_analysis(analysis: ElectricityAnalysis,
 
     total_horas = len(records)
 
-    # Separar registros por periodo de potencia
+    # Separar por periodo de potencia
     records_p1 = [r for r in records if r.power_period == PowerPeriod.P1]
     records_p2 = [r for r in records if r.power_period == PowerPeriod.P2]
 
     potencias_p1 = [r.consumption_kwh for r in records_p1]
     potencias_p2 = [r.consumption_kwh for r in records_p2]
 
-    # Maximos reales desde CSV oficial
+    # ----------------------------------------------------------------
+    # MAXIMOS REALES DESDE CSV OFICIAL
+    # ----------------------------------------------------------------
+
     punta_records = [r for r in monthly_max_power if r.period == 'Punta']
     valle_records = [r for r in monthly_max_power if r.period == 'Valle']
 
     max_real_p1 = _round4(max(r.max_kw for r in punta_records)) if punta_records else _round4(max(potencias_p1)) if potencias_p1 else 0.0
     max_real_p2 = _round4(max(r.max_kw for r in valle_records)) if valle_records else _round4(max(potencias_p2)) if potencias_p2 else 0.0
 
-    # Potencias recomendadas
-    recommended_p1 = _potencia_recomendada_comercial(max_real_p1)
-    recommended_p2 = _potencia_recomendada_comercial(max_real_p2)
+    # ----------------------------------------------------------------
+    # P95 DESDE CSV DE CONSUMO HORARIO
+    # ----------------------------------------------------------------
 
-    # Horas de exceso con la potencia actual
-    horas_exceso_p1_actual = sum(1 for v in potencias_p1 if v > contracted_p1) if contracted_p1 > 0 else 0
-    horas_exceso_p2_actual = sum(1 for v in potencias_p2 if v > contracted_p2) if contracted_p2 > 0 else 0
+    p95_p1 = _round4(float(np.percentile(potencias_p1, 95))) if potencias_p1 else 0.0
+    p95_p2 = _round4(float(np.percentile(potencias_p2, 95))) if potencias_p2 else 0.0
 
-    print(f"  Maximo real P1 (Punta): {max_real_p1} kW")
-    print(f"  Maximo real P2 (Valle): {max_real_p2} kW")
-    print(f"  Recomendada P1: {recommended_p1} kW")
-    print(f"  Recomendada P2: {recommended_p2} kW")
-    print(f"  Horas exceso P1 actual: {horas_exceso_p1_actual}")
-    print(f"  Horas exceso P2 actual: {horas_exceso_p2_actual}")
+    # ----------------------------------------------------------------
+    # DOS OPCIONES SUGERIDAS (no recomendacion automatica)
+    # ----------------------------------------------------------------
+
+    MARGEN_EQUILIBRADA = 1.05  # 5% sobre P95
+
+    # Opcion equilibrada: cubre P95 con 5% de margen
+    equilibrada_p1 = _primera_potencia_comercial_sobre(p95_p1 * MARGEN_EQUILIBRADA)
+    equilibrada_p2 = _primera_potencia_comercial_sobre(p95_p2 * MARGEN_EQUILIBRADA)
+
+    # Opcion segura: cubre el maximo real registrado
+    segura_p1 = _primera_potencia_comercial_sobre(max_real_p1)
+    segura_p2 = _primera_potencia_comercial_sobre(max_real_p2)
+
+    # Horas de exceso para cada opcion
+    def horas_exceso(potencias, umbral):
+        return sum(1 for v in potencias if v > umbral) if umbral > 0 else 0
+
+    horas_exceso_actual_p1      = horas_exceso(potencias_p1, contracted_p1)
+    horas_exceso_actual_p2      = horas_exceso(potencias_p2, contracted_p2)
+    horas_exceso_equilibrada_p1 = horas_exceso(potencias_p1, equilibrada_p1)
+    horas_exceso_equilibrada_p2 = horas_exceso(potencias_p2, equilibrada_p2)
+    horas_exceso_segura_p1      = horas_exceso(potencias_p1, segura_p1)
+    horas_exceso_segura_p2      = horas_exceso(potencias_p2, segura_p2)
+
+    print(f"  P95 consumo P1: {p95_p1} kW | Maximo real P1: {max_real_p1} kW")
+    print(f"  P95 consumo P2: {p95_p2} kW | Maximo real P2: {max_real_p2} kW")
+    print(f"  Opcion equilibrada P1: {equilibrada_p1} kW ({horas_exceso_equilibrada_p1}h exceso)")
+    print(f"  Opcion segura P1:      {segura_p1} kW ({horas_exceso_segura_p1}h exceso)")
+
+    opciones_sugeridas = {
+        'equilibrada': {
+            'p1':               equilibrada_p1,
+            'p2':               equilibrada_p2,
+            'horas_exceso_p1':  horas_exceso_equilibrada_p1,
+            'horas_exceso_p2':  horas_exceso_equilibrada_p2,
+            'riesgo_p1':        _nivel_riesgo(horas_exceso_equilibrada_p1, total_horas),
+            'riesgo_p2':        _nivel_riesgo(horas_exceso_equilibrada_p2, total_horas),
+            'titulo':           'Opcion equilibrada',
+            'descripcion':      (
+                f"Cubre el 95% de las horas de uso habitual con un margen del 5%. "
+                f"Pueden producirse excesos puntuales en momentos de coincidencia "
+                f"de varios electrodomesticos, pero son poco frecuentes. "
+                f"Es la opcion mas economica con un riesgo aceptable."
+            ),
+            'base_calculo':     f"P95 consumo horario P1: {p95_p1} kW",
+        },
+        'segura': {
+            'p1':               segura_p1,
+            'p2':               segura_p2,
+            'horas_exceso_p1':  horas_exceso_segura_p1,
+            'horas_exceso_p2':  horas_exceso_segura_p2,
+            'riesgo_p1':        _nivel_riesgo(horas_exceso_segura_p1, total_horas),
+            'riesgo_p2':        _nivel_riesgo(horas_exceso_segura_p2, total_horas),
+            'titulo':           'Opcion segura',
+            'descripcion':      (
+                f"Cubre absolutamente todos los picos registrados, incluidos "
+                f"los mas excepcionales. Sin riesgo de excesos. "
+                f"Adecuada si quieres total tranquilidad o si usas habitualmente "
+                f"varios electrodomesticos de alta potencia a la vez."
+            ),
+            'base_calculo':     f"Maximo real registrado P1: {max_real_p1} kW",
+        }
+    }
 
     # ----------------------------------------------------------------
     # KPIs
@@ -134,105 +191,67 @@ def run_optimization_analysis(analysis: ElectricityAnalysis,
     kpis = {
         'contracted_p1':        contracted_p1,
         'contracted_p2':        contracted_p2,
-        'recommended_p1':       recommended_p1,
-        'recommended_p2':       recommended_p2,
+        'horas_exceso_p1':      horas_exceso_actual_p1,
+        'horas_exceso_p2':      horas_exceso_actual_p2,
+        'pct_exceso_p1':        _round2((horas_exceso_actual_p1 / len(records_p1)) * 100) if records_p1 else 0.0,
+        'pct_exceso_p2':        _round2((horas_exceso_actual_p2 / len(records_p2)) * 100) if records_p2 else 0.0,
         'max_real_p1':          max_real_p1,
         'max_real_p2':          max_real_p2,
-        'horas_exceso_p1':      horas_exceso_p1_actual,
-        'horas_exceso_p2':      horas_exceso_p2_actual,
-        'pct_exceso_p1':        _round2((horas_exceso_p1_actual / len(records_p1)) * 100) if records_p1 else 0.0,
-        'pct_exceso_p2':        _round2((horas_exceso_p2_actual / len(records_p2)) * 100) if records_p2 else 0.0,
-        'tiene_exceso':         horas_exceso_p1_actual > 0 or horas_exceso_p2_actual > 0,
-        'tiene_sobredimension': contracted_p1 > recommended_p1 * 1.1 or contracted_p2 > recommended_p2 * 1.1,
+        'p95_p1':               p95_p1,
+        'p95_p2':               p95_p2,
+        'tiene_exceso':         horas_exceso_actual_p1 > 0 or horas_exceso_actual_p2 > 0,
     }
 
     # ----------------------------------------------------------------
-    # CURVA DE HORAS SUPERADAS VS POTENCIA (P1 y P2)
-    # Para cada potencia comercial calcula cuantas horas se superarian
+    # CURVA DE HORAS SUPERADAS VS POTENCIA
     # ----------------------------------------------------------------
 
     curva_p1 = []
     curva_p2 = []
 
     for pot in POTENCIAS_COMERCIALES:
-        horas_sup_p1 = sum(1 for v in potencias_p1 if v > pot)
-        horas_sup_p2 = sum(1 for v in potencias_p2 if v > pot)
+        h_p1 = horas_exceso(potencias_p1, pot)
+        h_p2 = horas_exceso(potencias_p2, pot)
 
         curva_p1.append({
-            'potencia':     pot,
-            'horas_exceso': horas_sup_p1,
-            'pct_exceso':   _round2((horas_sup_p1 / len(records_p1)) * 100) if records_p1 else 0.0,
-            'es_actual':    pot == contracted_p1,
-            'es_recomendada': pot == recommended_p1,
+            'potencia':         pot,
+            'horas_exceso':     h_p1,
+            'pct_exceso':       _round2((h_p1 / len(records_p1)) * 100) if records_p1 else 0.0,
+            'es_actual':        pot == contracted_p1,
+            'es_equilibrada':   pot == equilibrada_p1,
+            'es_segura':        pot == segura_p1,
         })
 
         curva_p2.append({
-            'potencia':     pot,
-            'horas_exceso': horas_sup_p2,
-            'pct_exceso':   _round2((horas_sup_p2 / len(records_p2)) * 100) if records_p2 else 0.0,
-            'es_actual':    pot == contracted_p2,
-            'es_recomendada': pot == recommended_p2,
+            'potencia':         pot,
+            'horas_exceso':     h_p2,
+            'pct_exceso':       _round2((h_p2 / len(records_p2)) * 100) if records_p2 else 0.0,
+            'es_actual':        pot == contracted_p2,
+            'es_equilibrada':   pot == equilibrada_p2,
+            'es_segura':        pot == segura_p2,
         })
 
     # ----------------------------------------------------------------
     # TABLA COMPARATIVA DE OPCIONES
     # ----------------------------------------------------------------
 
-    tabla_opciones_p1 = [
-        {
-            'potencia':         pot,
-            'horas_exceso':     entry['horas_exceso'],
-            'pct_exceso':       entry['pct_exceso'],
-            'riesgo':           _nivel_riesgo(entry['horas_exceso'], total_horas),
-            'es_actual':        pot == contracted_p1,
-            'es_recomendada':   pot == recommended_p1,
-            'margen_kw':        _round4(pot - max_real_p1),
-        }
-        for pot, entry in zip(POTENCIAS_COMERCIALES, curva_p1)
-    ]
+    def build_tabla(curva, max_real, p95):
+        return [
+            {
+                'potencia':       entry['potencia'],
+                'horas_exceso':   entry['horas_exceso'],
+                'pct_exceso':     entry['pct_exceso'],
+                'riesgo':         _nivel_riesgo(entry['horas_exceso'], total_horas),
+                'margen_kw':      _round4(entry['potencia'] - max_real),
+                'es_actual':      entry['es_actual'],
+                'es_equilibrada': entry['es_equilibrada'],
+                'es_segura':      entry['es_segura'],
+            }
+            for entry in curva
+        ]
 
-    tabla_opciones_p2 = [
-        {
-            'potencia':         pot,
-            'horas_exceso':     entry['horas_exceso'],
-            'pct_exceso':       entry['pct_exceso'],
-            'riesgo':           _nivel_riesgo(entry['horas_exceso'], total_horas),
-            'es_actual':        pot == contracted_p2,
-            'es_recomendada':   pot == recommended_p2,
-            'margen_kw':        _round4(pot - max_real_p2),
-        }
-        for pot, entry in zip(POTENCIAS_COMERCIALES, curva_p2)
-    ]
-
-    # ----------------------------------------------------------------
-    # EXCESOS DETALLADOS CON POTENCIA ACTUAL
-    # ----------------------------------------------------------------
-
-    excesos_p1 = [
-        {
-            'timestamp':    str(r.timestamp),
-            'fecha':        r.timestamp.strftime('%d/%m/%Y'),
-            'hora':         f"{r.timestamp.hour:02d}:00",
-            'dia_semana':   r.day_of_week.capitalize(),
-            'mes':          r.month_name.capitalize(),
-            'kwh':          _round4(r.consumption_kwh),
-            'exceso_kwh':   _round4(r.consumption_kwh - contracted_p1),
-        }
-        for r in records_p1 if r.consumption_kwh > contracted_p1 and contracted_p1 > 0
-    ]
-
-    excesos_p2 = [
-        {
-            'timestamp':    str(r.timestamp),
-            'fecha':        r.timestamp.strftime('%d/%m/%Y'),
-            'hora':         f"{r.timestamp.hour:02d}:00",
-            'dia_semana':   r.day_of_week.capitalize(),
-            'mes':          r.month_name.capitalize(),
-            'kwh':          _round4(r.consumption_kwh),
-            'exceso_kwh':   _round4(r.consumption_kwh - contracted_p2),
-        }
-        for r in records_p2 if r.consumption_kwh > contracted_p2 and contracted_p2 > 0
-    ]
+    tabla_p1 = build_tabla(curva_p1, max_real_p1, p95_p1)
+    tabla_p2 = build_tabla(curva_p2, max_real_p2, p95_p2)
 
     print("Analisis de optimizacion completado.")
 
@@ -240,11 +259,10 @@ def run_optimization_analysis(analysis: ElectricityAnalysis,
         'contracted_p1':      contracted_p1,
         'contracted_p2':      contracted_p2,
         'kpis':               kpis,
+        'opciones_sugeridas': opciones_sugeridas,
         'curva_p1':           curva_p1,
         'curva_p2':           curva_p2,
-        'tabla_opciones_p1':  tabla_opciones_p1,
-        'tabla_opciones_p2':  tabla_opciones_p2,
-        'excesos_p1':         excesos_p1,
-        'excesos_p2':         excesos_p2,
+        'tabla_p1':           tabla_p1,
+        'tabla_p2':           tabla_p2,
         'potencias_comerciales': POTENCIAS_COMERCIALES,
     }

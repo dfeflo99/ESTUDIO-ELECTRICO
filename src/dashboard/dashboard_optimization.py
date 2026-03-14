@@ -1,12 +1,7 @@
 # =============================================================================
 # src/dashboard/dashboard_optimization.py
 # Dashboard interactivo de optimizacion de potencia con Dash
-# Version: 1.0
-#
-# Pagina 4: Optimizacion de potencia contratada
-#
-# Controles interactivos:
-#   - Dropdowns P1 y P2 -> actualiza todos los graficos
+# Version: 1.1
 # =============================================================================
 
 import dash
@@ -19,15 +14,11 @@ from src.models.internal_data_model import ElectricityAnalysis
 from src.analysis.optimization_engine import run_optimization_analysis, POTENCIAS_COMERCIALES
 from src.analysis.charts.optimization_charts import (
     chart_optimization_kpis,
+    chart_suggested_options,
     chart_exceedance_curve,
     chart_options_table_p1,
     chart_options_table_p2,
 )
-
-
-# =============================================================================
-# ESTILOS
-# =============================================================================
 
 COLORS = {
     'primary':    '#2563EB',
@@ -82,52 +73,42 @@ FILTER_LABEL_STYLE = {
 }
 
 
-# =============================================================================
-# LAYOUT
-# =============================================================================
-
 def build_optimization_layout(analysis: ElectricityAnalysis,
                                contracted_p1: float = 2.3,
                                contracted_p2: float = 2.3) -> html.Div:
 
-    opciones_potencias = [
-        {'label': f"{p} kW", 'value': p}
-        for p in POTENCIAS_COMERCIALES
-    ]
+    opciones = [{'label': f"{p} kW", 'value': p} for p in POTENCIAS_COMERCIALES]
 
     return html.Div(
         style={'backgroundColor': COLORS['background'],
                'minHeight': '100vh', 'padding': '24px'},
         children=[
 
-            # --- CABECERA ---
+            # Cabecera
             html.Div(
                 style={**CARD_STYLE, 'display': 'flex',
-                       'justifyContent': 'space-between',
-                       'alignItems': 'center'},
+                       'justifyContent': 'space-between', 'alignItems': 'center'},
                 children=[
                     html.Div([
-                        html.H1('Optimizacion de Potencia Contratada',
-                                style=TITLE_STYLE),
+                        html.H1('Optimizacion de Potencia Contratada', style=TITLE_STYLE),
                         html.P(
                             'Analisis tecnico para encontrar la potencia optima. '
-                            'Sin calculos economicos — el estudio de costes se realiza '
-                            'en el apartado de factura.',
+                            'Sin calculos economicos — el estudio de costes se '
+                            'realiza en el apartado de factura.',
                             style=SUBTITLE_STYLE
                         ),
                     ]),
                 ]
             ),
 
-            # --- CONTROLES ---
+            # Controles
             html.Div(
                 style=CARD_STYLE,
                 children=[
-                    html.P('Ajusta la potencia contratada para simular:',
+                    html.P('Ajusta la potencia contratada actual para simular:',
                            style=FILTER_LABEL_STYLE),
                     html.P(
-                        'Cambia P1 y P2 para ver cuantas horas superarias '
-                        'cada nivel de potencia. La curva y las tablas se '
+                        'Las opciones sugeridas, la curva y las tablas se '
                         'actualizan automaticamente.',
                         style={**SUBTITLE_STYLE, 'marginBottom': '16px'}
                     ),
@@ -142,12 +123,9 @@ def build_optimization_layout(analysis: ElectricityAnalysis,
                                 html.P('Periodo laboral 8h-24h',
                                        style={**SUBTITLE_STYLE, 'marginBottom': '8px'}),
                                 dcc.Dropdown(
-                                    id        = 'opt-p1-dropdown',
-                                    options   = opciones_potencias,
-                                    value     = contracted_p1,
-                                    clearable = False,
-                                    style     = {'fontFamily': 'Segoe UI, Arial',
-                                                 'fontSize': '14px'}
+                                    id='opt-p1-dropdown', options=opciones,
+                                    value=contracted_p1, clearable=False,
+                                    style={'fontFamily': 'Segoe UI, Arial', 'fontSize': '14px'}
                                 ),
                             ]),
                             html.Div([
@@ -156,12 +134,9 @@ def build_optimization_layout(analysis: ElectricityAnalysis,
                                 html.P('Periodo nocturno y fines de semana',
                                        style={**SUBTITLE_STYLE, 'marginBottom': '8px'}),
                                 dcc.Dropdown(
-                                    id        = 'opt-p2-dropdown',
-                                    options   = opciones_potencias,
-                                    value     = contracted_p2,
-                                    clearable = False,
-                                    style     = {'fontFamily': 'Segoe UI, Arial',
-                                                 'fontSize': '14px'}
+                                    id='opt-p2-dropdown', options=opciones,
+                                    value=contracted_p2, clearable=False,
+                                    style={'fontFamily': 'Segoe UI, Arial', 'fontSize': '14px'}
                                 ),
                             ]),
                         ]
@@ -169,57 +144,50 @@ def build_optimization_layout(analysis: ElectricityAnalysis,
                 ]
             ),
 
-            # --- KPIs ---
-            html.Div(
-                style=CARD_STYLE,
-                children=[
-                    html.P('Resumen de optimizacion', style=SECTION_TITLE_STYLE),
-                    dcc.Graph(id='opt-graph-kpis',
-                              config={'displayModeBar': False}),
-                ]
-            ),
+            # KPIs
+            html.Div(style=CARD_STYLE, children=[
+                html.P('Resumen', style=SECTION_TITLE_STYLE),
+                dcc.Graph(id='opt-graph-kpis', config={'displayModeBar': False}),
+            ]),
 
-            # --- CURVA DE HORAS SUPERADAS ---
-            html.Div(
-                style=CARD_STYLE,
-                children=[
-                    html.P('Curva de Horas de Exceso por Nivel de Potencia',
-                           style=SECTION_TITLE_STYLE),
-                    html.P(
-                        'Cada punto muestra cuantas horas al ano superarias '
-                        'si contratases esa potencia. El punto optimo equilibra '
-                        'seguridad y coste.',
-                        style={**SUBTITLE_STYLE, 'marginBottom': '12px'}
-                    ),
-                    dcc.Graph(id='opt-graph-curva',
-                              config={'displayModeBar': False}),
-                ]
-            ),
+            # Opciones sugeridas
+            html.Div(style=CARD_STYLE, children=[
+                html.P('Opciones Sugeridas', style=SECTION_TITLE_STYLE),
+                html.P(
+                    'El sistema presenta dos opciones para que el cliente decida '
+                    'segun su perfil de uso y tolerancia al riesgo.',
+                    style={**SUBTITLE_STYLE, 'marginBottom': '12px'}
+                ),
+                dcc.Graph(id='opt-graph-opciones', config={'displayModeBar': False}),
+            ]),
 
-            # --- TABLAS COMPARATIVAS ---
+            # Curva
+            html.Div(style=CARD_STYLE, children=[
+                html.P('Curva de Horas de Exceso por Nivel de Potencia',
+                       style=SECTION_TITLE_STYLE),
+                html.P(
+                    'Cada punto muestra cuantas horas al ano superarias si '
+                    'contratases esa potencia.',
+                    style={**SUBTITLE_STYLE, 'marginBottom': '12px'}
+                ),
+                dcc.Graph(id='opt-graph-curva', config={'displayModeBar': False}),
+            ]),
+
+            # Tablas
             html.Div(
                 style={'display': 'grid',
                        'gridTemplateColumns': '1fr 1fr',
-                       'gap': '20px',
-                       'marginBottom': '20px'},
+                       'gap': '20px', 'marginBottom': '20px'},
                 children=[
                     html.Div(style=CARD_STYLE, children=[
                         html.P('Opciones disponibles — P1 (Punta)',
                                style=SECTION_TITLE_STYLE),
-                        html.P(
-                            'Rojo = opcion actual | Verde = opcion recomendada',
-                            style={**SUBTITLE_STYLE, 'marginBottom': '8px'}
-                        ),
                         dcc.Graph(id='opt-graph-tabla-p1',
                                   config={'displayModeBar': False}),
                     ]),
                     html.Div(style=CARD_STYLE, children=[
                         html.P('Opciones disponibles — P2 (Valle)',
                                style=SECTION_TITLE_STYLE),
-                        html.P(
-                            'Rojo = opcion actual | Verde = opcion recomendada',
-                            style={**SUBTITLE_STYLE, 'marginBottom': '8px'}
-                        ),
                         dcc.Graph(id='opt-graph-tabla-p2',
                                   config={'displayModeBar': False}),
                     ]),
@@ -230,23 +198,11 @@ def build_optimization_layout(analysis: ElectricityAnalysis,
     )
 
 
-# =============================================================================
-# FUNCION PRINCIPAL
-# =============================================================================
-
 def run_optimization_dashboard(analysis: ElectricityAnalysis,
                                 contracted_p1: float = 2.3,
                                 contracted_p2: float = 2.3,
                                 port: int = 8053):
-    """
-    Lanza el dashboard interactivo de optimizacion de potencia.
 
-    Args:
-        analysis:      ElectricityAnalysis con datos validados
-        contracted_p1: Potencia contratada P1 inicial
-        contracted_p2: Potencia contratada P2 inicial
-        port:          Puerto (default: 8053)
-    """
     _analysis_global = analysis
 
     app = dash.Dash(
@@ -255,23 +211,18 @@ def run_optimization_dashboard(analysis: ElectricityAnalysis,
         title='Estudio Electrico — Optimizacion'
     )
 
-    app.layout = build_optimization_layout(
-        analysis, contracted_p1, contracted_p2
-    )
-
-    # ----------------------------------------------------------------
-    # CALLBACK PRINCIPAL
-    # ----------------------------------------------------------------
+    app.layout = build_optimization_layout(analysis, contracted_p1, contracted_p2)
 
     @app.callback(
         Output('opt-graph-kpis',     'figure'),
+        Output('opt-graph-opciones', 'figure'),
         Output('opt-graph-curva',    'figure'),
         Output('opt-graph-tabla-p1', 'figure'),
         Output('opt-graph-tabla-p2', 'figure'),
         Input('opt-p1-dropdown',     'value'),
         Input('opt-p2-dropdown',     'value'),
     )
-    def update_optimization_charts(p1, p2):
+    def update_charts(p1, p2):
         data = run_optimization_analysis(
             _analysis_global,
             contracted_p1 = float(p1) if p1 else 2.3,
@@ -279,6 +230,7 @@ def run_optimization_dashboard(analysis: ElectricityAnalysis,
         )
         return (
             chart_optimization_kpis(data),
+            chart_suggested_options(data),
             chart_exceedance_curve(data),
             chart_options_table_p1(data),
             chart_options_table_p2(data),

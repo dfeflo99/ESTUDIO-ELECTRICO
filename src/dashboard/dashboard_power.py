@@ -400,7 +400,7 @@ def run_power_dashboard(analysis: ElectricityAnalysis, port: int = 8051):
         return (
             chart_power_kpis(power),
             chart_daily_max_power(power, meses),
-            chart_heatmap(power, meses),
+            chart_heatmap(power, meses, _analysis_global.hourly_records),
             chart_power_ranking(power),
             chart_profile_interpretation(power),
             chart_monthly_official_peaks(power),

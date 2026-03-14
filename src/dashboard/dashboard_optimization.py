@@ -1,7 +1,7 @@
 # =============================================================================
 # src/dashboard/dashboard_optimization.py
 # Dashboard interactivo de optimizacion de potencia con Dash
-# Version: 1.1
+# Version: 2.0
 # =============================================================================
 
 import dash
@@ -14,6 +14,8 @@ from src.models.internal_data_model import ElectricityAnalysis
 from src.analysis.optimization_engine import run_optimization_analysis, POTENCIAS_COMERCIALES
 from src.analysis.charts.optimization_charts import (
     chart_optimization_kpis,
+    chart_pattern_analysis,
+    chart_monthly_peaks_pattern,
     chart_suggested_options,
     chart_exceedance_curve,
     chart_options_table_p1,
@@ -73,10 +75,7 @@ FILTER_LABEL_STYLE = {
 }
 
 
-def build_optimization_layout(analysis: ElectricityAnalysis,
-                               contracted_p1: float = 2.3,
-                               contracted_p2: float = 2.3) -> html.Div:
-
+def build_optimization_layout(analysis, contracted_p1=2.3, contracted_p2=2.3):
     opciones = [{'label': f"{p} kW", 'value': p} for p in POTENCIAS_COMERCIALES]
 
     return html.Div(
@@ -92,9 +91,8 @@ def build_optimization_layout(analysis: ElectricityAnalysis,
                     html.Div([
                         html.H1('Optimizacion de Potencia Contratada', style=TITLE_STYLE),
                         html.P(
-                            'Analisis tecnico para encontrar la potencia optima. '
-                            'Sin calculos economicos — el estudio de costes se '
-                            'realiza en el apartado de factura.',
+                            'Cruce del CSV oficial de picos con el CSV de consumo. '
+                            'Detecta si los picos son puntuales o recurrentes.',
                             style=SUBTITLE_STYLE
                         ),
                     ]),
@@ -102,47 +100,35 @@ def build_optimization_layout(analysis: ElectricityAnalysis,
             ),
 
             # Controles
-            html.Div(
-                style=CARD_STYLE,
-                children=[
-                    html.P('Ajusta la potencia contratada actual para simular:',
-                           style=FILTER_LABEL_STYLE),
-                    html.P(
-                        'Las opciones sugeridas, la curva y las tablas se '
-                        'actualizan automaticamente.',
-                        style={**SUBTITLE_STYLE, 'marginBottom': '16px'}
-                    ),
-                    html.Div(
-                        style={'display': 'grid',
-                               'gridTemplateColumns': '1fr 1fr',
-                               'gap': '24px'},
-                        children=[
-                            html.Div([
-                                html.P('Potencia contratada P1 (kW):',
-                                       style=FILTER_LABEL_STYLE),
-                                html.P('Periodo laboral 8h-24h',
-                                       style={**SUBTITLE_STYLE, 'marginBottom': '8px'}),
-                                dcc.Dropdown(
-                                    id='opt-p1-dropdown', options=opciones,
-                                    value=contracted_p1, clearable=False,
-                                    style={'fontFamily': 'Segoe UI, Arial', 'fontSize': '14px'}
-                                ),
-                            ]),
-                            html.Div([
-                                html.P('Potencia contratada P2 (kW):',
-                                       style=FILTER_LABEL_STYLE),
-                                html.P('Periodo nocturno y fines de semana',
-                                       style={**SUBTITLE_STYLE, 'marginBottom': '8px'}),
-                                dcc.Dropdown(
-                                    id='opt-p2-dropdown', options=opciones,
-                                    value=contracted_p2, clearable=False,
-                                    style={'fontFamily': 'Segoe UI, Arial', 'fontSize': '14px'}
-                                ),
-                            ]),
-                        ]
-                    ),
-                ]
-            ),
+            html.Div(style=CARD_STYLE, children=[
+                html.P('Ajusta la potencia contratada actual:',
+                       style=FILTER_LABEL_STYLE),
+                html.Div(
+                    style={'display': 'grid',
+                           'gridTemplateColumns': '1fr 1fr',
+                           'gap': '24px'},
+                    children=[
+                        html.Div([
+                            html.P('Potencia P1 (kW) — Laborable 8h-24h:',
+                                   style=FILTER_LABEL_STYLE),
+                            dcc.Dropdown(
+                                id='opt-p1-dropdown', options=opciones,
+                                value=contracted_p1, clearable=False,
+                                style={'fontFamily': 'Segoe UI, Arial', 'fontSize': '14px'}
+                            ),
+                        ]),
+                        html.Div([
+                            html.P('Potencia P2 (kW) — Nocturno / Finde:',
+                                   style=FILTER_LABEL_STYLE),
+                            dcc.Dropdown(
+                                id='opt-p2-dropdown', options=opciones,
+                                value=contracted_p2, clearable=False,
+                                style={'fontFamily': 'Segoe UI, Arial', 'fontSize': '14px'}
+                            ),
+                        ]),
+                    ]
+                ),
+            ]),
 
             # KPIs
             html.Div(style=CARD_STYLE, children=[
@@ -150,12 +136,36 @@ def build_optimization_layout(analysis: ElectricityAnalysis,
                 dcc.Graph(id='opt-graph-kpis', config={'displayModeBar': False}),
             ]),
 
+            # Analisis de patron por mes (tabla)
+            html.Div(style=CARD_STYLE, children=[
+                html.P('Analisis de Patron por Mes', style=SECTION_TITLE_STYLE),
+                html.P(
+                    'Para cada mes se compara el pico oficial con las horas '
+                    'del CSV de consumo que superaron el 75% de ese pico. '
+                    'Verde = puntual | Amarillo = ocasional | Rojo = recurrente.',
+                    style={**SUBTITLE_STYLE, 'marginBottom': '12px'}
+                ),
+                dcc.Graph(id='opt-graph-patron-tabla',
+                          config={'displayModeBar': False}),
+            ]),
+
+            # Picos mensuales con patron (barras)
+            html.Div(style=CARD_STYLE, children=[
+                html.P('Picos Mensuales por Periodo', style=SECTION_TITLE_STYLE),
+                html.P(
+                    'Las barras se colorean segun el patron detectado. '
+                    'La linea roja muestra la potencia contratada actual.',
+                    style={**SUBTITLE_STYLE, 'marginBottom': '12px'}
+                ),
+                dcc.Graph(id='opt-graph-patron-barras',
+                          config={'displayModeBar': False}),
+            ]),
+
             # Opciones sugeridas
             html.Div(style=CARD_STYLE, children=[
                 html.P('Opciones Sugeridas', style=SECTION_TITLE_STYLE),
                 html.P(
-                    'El sistema presenta dos opciones para que el cliente decida '
-                    'segun su perfil de uso y tolerancia al riesgo.',
+                    'El sistema presenta dos opciones para que el cliente decida.',
                     style={**SUBTITLE_STYLE, 'marginBottom': '12px'}
                 ),
                 dcc.Graph(id='opt-graph-opciones', config={'displayModeBar': False}),
@@ -165,11 +175,6 @@ def build_optimization_layout(analysis: ElectricityAnalysis,
             html.Div(style=CARD_STYLE, children=[
                 html.P('Curva de Horas de Exceso por Nivel de Potencia',
                        style=SECTION_TITLE_STYLE),
-                html.P(
-                    'Cada punto muestra cuantas horas al ano superarias si '
-                    'contratases esa potencia.',
-                    style={**SUBTITLE_STYLE, 'marginBottom': '12px'}
-                ),
                 dcc.Graph(id='opt-graph-curva', config={'displayModeBar': False}),
             ]),
 
@@ -180,20 +185,17 @@ def build_optimization_layout(analysis: ElectricityAnalysis,
                        'gap': '20px', 'marginBottom': '20px'},
                 children=[
                     html.Div(style=CARD_STYLE, children=[
-                        html.P('Opciones disponibles — P1 (Punta)',
-                               style=SECTION_TITLE_STYLE),
+                        html.P('Opciones P1 (Punta)', style=SECTION_TITLE_STYLE),
                         dcc.Graph(id='opt-graph-tabla-p1',
                                   config={'displayModeBar': False}),
                     ]),
                     html.Div(style=CARD_STYLE, children=[
-                        html.P('Opciones disponibles — P2 (Valle)',
-                               style=SECTION_TITLE_STYLE),
+                        html.P('Opciones P2 (Valle)', style=SECTION_TITLE_STYLE),
                         dcc.Graph(id='opt-graph-tabla-p2',
                                   config={'displayModeBar': False}),
                     ]),
                 ]
             ),
-
         ]
     )
 
@@ -214,13 +216,15 @@ def run_optimization_dashboard(analysis: ElectricityAnalysis,
     app.layout = build_optimization_layout(analysis, contracted_p1, contracted_p2)
 
     @app.callback(
-        Output('opt-graph-kpis',     'figure'),
-        Output('opt-graph-opciones', 'figure'),
-        Output('opt-graph-curva',    'figure'),
-        Output('opt-graph-tabla-p1', 'figure'),
-        Output('opt-graph-tabla-p2', 'figure'),
-        Input('opt-p1-dropdown',     'value'),
-        Input('opt-p2-dropdown',     'value'),
+        Output('opt-graph-kpis',          'figure'),
+        Output('opt-graph-patron-tabla',  'figure'),
+        Output('opt-graph-patron-barras', 'figure'),
+        Output('opt-graph-opciones',      'figure'),
+        Output('opt-graph-curva',         'figure'),
+        Output('opt-graph-tabla-p1',      'figure'),
+        Output('opt-graph-tabla-p2',      'figure'),
+        Input('opt-p1-dropdown',          'value'),
+        Input('opt-p2-dropdown',          'value'),
     )
     def update_charts(p1, p2):
         data = run_optimization_analysis(
@@ -230,6 +234,8 @@ def run_optimization_dashboard(analysis: ElectricityAnalysis,
         )
         return (
             chart_optimization_kpis(data),
+            chart_pattern_analysis(data),
+            chart_monthly_peaks_pattern(data),
             chart_suggested_options(data),
             chart_exceedance_curve(data),
             chart_options_table_p1(data),

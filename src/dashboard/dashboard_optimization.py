@@ -1,7 +1,6 @@
 # =============================================================================
 # src/dashboard/dashboard_optimization.py
-# Dashboard interactivo de optimizacion de potencia con Dash
-# Version: 2.0
+# Dashboard de optimizacion de potencia — Version 3.0
 # =============================================================================
 
 import dash
@@ -14,12 +13,9 @@ from src.models.internal_data_model import ElectricityAnalysis
 from src.analysis.optimization_engine import run_optimization_analysis, POTENCIAS_COMERCIALES
 from src.analysis.charts.optimization_charts import (
     chart_optimization_kpis,
-    chart_pattern_analysis,
-    chart_monthly_peaks_pattern,
+    chart_monthly_peaks,
+    chart_exceso_table,
     chart_suggested_options,
-    chart_exceedance_curve,
-    chart_options_table_p1,
-    chart_options_table_p2,
 )
 
 COLORS = {
@@ -86,30 +82,28 @@ def build_optimization_layout(analysis, contracted_p1=2.3, contracted_p2=2.3):
             # Cabecera
             html.Div(
                 style={**CARD_STYLE, 'display': 'flex',
-                       'justifyContent': 'space-between', 'alignItems': 'center'},
-                children=[
-                    html.Div([
-                        html.H1('Optimizacion de Potencia Contratada', style=TITLE_STYLE),
-                        html.P(
-                            'Cruce del CSV oficial de picos con el CSV de consumo. '
-                            'Detecta si los picos son puntuales o recurrentes.',
-                            style=SUBTITLE_STYLE
-                        ),
-                    ]),
-                ]
+                       'justifyContent': 'space-between',
+                       'alignItems': 'center'},
+                children=[html.Div([
+                    html.H1('Optimizacion de Potencia Contratada', style=TITLE_STYLE),
+                    html.P(
+                        'Analisis de picos reales vs potencia contratada. '
+                        'Cambia la potencia actual para simular distintos escenarios.',
+                        style=SUBTITLE_STYLE
+                    ),
+                ])]
             ),
 
             # Controles
             html.Div(style=CARD_STYLE, children=[
-                html.P('Ajusta la potencia contratada actual:',
-                       style=FILTER_LABEL_STYLE),
+                html.P('Potencia contratada actual:', style=FILTER_LABEL_STYLE),
                 html.Div(
                     style={'display': 'grid',
                            'gridTemplateColumns': '1fr 1fr',
                            'gap': '24px'},
                     children=[
                         html.Div([
-                            html.P('Potencia P1 (kW) — Laborable 8h-24h:',
+                            html.P('P1 (kW) — Laborable 8h-24h:',
                                    style=FILTER_LABEL_STYLE),
                             dcc.Dropdown(
                                 id='opt-p1-dropdown', options=opciones,
@@ -118,7 +112,7 @@ def build_optimization_layout(analysis, contracted_p1=2.3, contracted_p2=2.3):
                             ),
                         ]),
                         html.Div([
-                            html.P('Potencia P2 (kW) — Nocturno / Finde:',
+                            html.P('P2 (kW) — Nocturno / Finde:',
                                    style=FILTER_LABEL_STYLE),
                             dcc.Dropdown(
                                 id='opt-p2-dropdown', options=opciones,
@@ -133,69 +127,38 @@ def build_optimization_layout(analysis, contracted_p1=2.3, contracted_p2=2.3):
             # KPIs
             html.Div(style=CARD_STYLE, children=[
                 html.P('Resumen', style=SECTION_TITLE_STYLE),
-                dcc.Graph(id='opt-graph-kpis', config={'displayModeBar': False}),
+                dcc.Graph(id='opt-kpis', config={'displayModeBar': False}),
             ]),
 
-            # Analisis de patron por mes (tabla)
+            # Picos mensuales
             html.Div(style=CARD_STYLE, children=[
-                html.P('Analisis de Patron por Mes', style=SECTION_TITLE_STYLE),
+                html.P('Picos Mensuales vs Potencia Contratada',
+                       style=SECTION_TITLE_STYLE),
                 html.P(
-                    'Para cada mes se compara el pico oficial con las horas '
-                    'del CSV de consumo que superaron el 75% de ese pico. '
-                    'Verde = puntual | Amarillo = ocasional | Rojo = recurrente.',
+                    'Rojo = mes que supera la potencia contratada. '
+                    'Azul = dentro del limite.',
                     style={**SUBTITLE_STYLE, 'marginBottom': '12px'}
                 ),
-                dcc.Graph(id='opt-graph-patron-tabla',
-                          config={'displayModeBar': False}),
+                dcc.Graph(id='opt-picos', config={'displayModeBar': False}),
             ]),
 
-            # Picos mensuales con patron (barras)
+            # Tabla de excesos
             html.Div(style=CARD_STYLE, children=[
-                html.P('Picos Mensuales por Periodo', style=SECTION_TITLE_STYLE),
-                html.P(
-                    'Las barras se colorean segun el patron detectado. '
-                    'La linea roja muestra la potencia contratada actual.',
-                    style={**SUBTITLE_STYLE, 'marginBottom': '12px'}
-                ),
-                dcc.Graph(id='opt-graph-patron-barras',
-                          config={'displayModeBar': False}),
+                html.P('Detalle de Meses con Exceso', style=SECTION_TITLE_STYLE),
+                dcc.Graph(id='opt-excesos', config={'displayModeBar': False}),
             ]),
 
             # Opciones sugeridas
             html.Div(style=CARD_STYLE, children=[
                 html.P('Opciones Sugeridas', style=SECTION_TITLE_STYLE),
                 html.P(
-                    'El sistema presenta dos opciones para que el cliente decida.',
+                    'El sistema te presenta dos opciones. Tu decides segun '
+                    'tu tolerancia al riesgo y lo que quieras pagar.',
                     style={**SUBTITLE_STYLE, 'marginBottom': '12px'}
                 ),
-                dcc.Graph(id='opt-graph-opciones', config={'displayModeBar': False}),
+                dcc.Graph(id='opt-opciones', config={'displayModeBar': False}),
             ]),
 
-            # Curva
-            html.Div(style=CARD_STYLE, children=[
-                html.P('Curva de Horas de Exceso por Nivel de Potencia',
-                       style=SECTION_TITLE_STYLE),
-                dcc.Graph(id='opt-graph-curva', config={'displayModeBar': False}),
-            ]),
-
-            # Tablas
-            html.Div(
-                style={'display': 'grid',
-                       'gridTemplateColumns': '1fr 1fr',
-                       'gap': '20px', 'marginBottom': '20px'},
-                children=[
-                    html.Div(style=CARD_STYLE, children=[
-                        html.P('Opciones P1 (Punta)', style=SECTION_TITLE_STYLE),
-                        dcc.Graph(id='opt-graph-tabla-p1',
-                                  config={'displayModeBar': False}),
-                    ]),
-                    html.Div(style=CARD_STYLE, children=[
-                        html.P('Opciones P2 (Valle)', style=SECTION_TITLE_STYLE),
-                        dcc.Graph(id='opt-graph-tabla-p2',
-                                  config={'displayModeBar': False}),
-                    ]),
-                ]
-            ),
         ]
     )
 
@@ -216,15 +179,12 @@ def run_optimization_dashboard(analysis: ElectricityAnalysis,
     app.layout = build_optimization_layout(analysis, contracted_p1, contracted_p2)
 
     @app.callback(
-        Output('opt-graph-kpis',          'figure'),
-        Output('opt-graph-patron-tabla',  'figure'),
-        Output('opt-graph-patron-barras', 'figure'),
-        Output('opt-graph-opciones',      'figure'),
-        Output('opt-graph-curva',         'figure'),
-        Output('opt-graph-tabla-p1',      'figure'),
-        Output('opt-graph-tabla-p2',      'figure'),
-        Input('opt-p1-dropdown',          'value'),
-        Input('opt-p2-dropdown',          'value'),
+        Output('opt-kpis',    'figure'),
+        Output('opt-picos',   'figure'),
+        Output('opt-excesos', 'figure'),
+        Output('opt-opciones','figure'),
+        Input('opt-p1-dropdown', 'value'),
+        Input('opt-p2-dropdown', 'value'),
     )
     def update_charts(p1, p2):
         data = run_optimization_analysis(
@@ -234,12 +194,9 @@ def run_optimization_dashboard(analysis: ElectricityAnalysis,
         )
         return (
             chart_optimization_kpis(data),
-            chart_pattern_analysis(data),
-            chart_monthly_peaks_pattern(data),
+            chart_monthly_peaks(data),
+            chart_exceso_table(data),
             chart_suggested_options(data),
-            chart_exceedance_curve(data),
-            chart_options_table_p1(data),
-            chart_options_table_p2(data),
         )
 
     print(f"Dashboard de optimizacion lanzado en http://localhost:{port}")

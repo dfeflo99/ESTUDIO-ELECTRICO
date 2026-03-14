@@ -65,8 +65,8 @@ def get_styles():
     styles = getSampleStyleSheet()
 
     styles.add(ParagraphStyle(
-        name='F2Title', fontName='Helvetica-Bold', fontSize=28,
-        textColor=ROJO, alignment=TA_CENTER, spaceAfter=6,
+        name='F2Title', fontName='Helvetica-Bold', fontSize=22,
+        textColor=ROJO, alignment=TA_CENTER, spaceAfter=6, leading=28,
     ))
     styles.add(ParagraphStyle(
         name='F2Subtitle', fontName='Helvetica', fontSize=14,
@@ -89,7 +89,7 @@ def get_styles():
         textColor=GRIS_CLARO, alignment=TA_CENTER,
     ))
     styles.add(ParagraphStyle(
-        name='F2KPI_Value', fontName='Helvetica-Bold', fontSize=18,
+        name='F2KPI_Value', fontName='Helvetica-Bold', fontSize=16,
         textColor=ROJO, alignment=TA_CENTER,
     ))
     styles.add(ParagraphStyle(
@@ -341,7 +341,7 @@ def build_potencia(analysis, styles, params):
 
     kpis = [
         ('Maximo Real',       f"{p.max_power_kw:.3f} kW"),
-        ('P99',               f"{p.p99_power_kw:.4f} kW"),
+        ('P99',               f"{p.p99_power_kw:.2f} kW"),
         ('Factor de Carga',   f"{p.load_factor:.3f}"),
         ('Horas sobre umbral',f"{p.hours_exceeds_2kw} h"),
         ('% sobre umbral',    f"{p.pct_exceeds_2kw}%"),

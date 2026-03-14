@@ -391,12 +391,19 @@ def extract_from_pdf(
     # 3. Validar datos
     datos = validate_extracted_data(datos)
 
-    # 4. Actualizar el analysis si se pasa
+    # 4. Normalizar datos
+    datos = normalizar_datos_extraidos(datos)
+
+    # 5. Actualizar el analysis si se pasa
     if analysis is not None:
         contract_info = build_contract_info(datos)
         if contract_info:
             analysis.contract = contract_info
             analysis.data_source = DataSource.OCR
+            # Actualizar tambien el tipo de contrato en el perfil del cliente
+            tipo = normalizar_tipo_tarifa(datos.get('contrato', {}).get('tipo_tarifa', ''))
+            if analysis.client:
+                analysis.client.contract_type = tipo
             print("  ContractInfo actualizado en ElectricityAnalysis")
 
     print("Extraccion OCR completada.")
@@ -434,12 +441,18 @@ def extract_from_images(
     # 3. Validar datos
     datos = validate_extracted_data(datos)
 
-    # 4. Actualizar el analysis si se pasa
+    # 4. Normalizar datos
+    datos = normalizar_datos_extraidos(datos)
+
+    # 5. Actualizar el analysis si se pasa
     if analysis is not None:
         contract_info = build_contract_info(datos)
         if contract_info:
             analysis.contract = contract_info
             analysis.data_source = DataSource.OCR
+            tipo = normalizar_tipo_tarifa(datos.get('contrato', {}).get('tipo_tarifa', ''))
+            if analysis.client:
+                analysis.client.contract_type = tipo
             print("  ContractInfo actualizado en ElectricityAnalysis")
 
     print("Extraccion OCR completada.")
@@ -489,3 +502,91 @@ def extract_from_files(
             f"Formato no soportado: {ext_primer}. "
             f"Formatos validos: PDF, JPG, PNG, WEBP"
         )
+
+
+# =============================================================================
+# NORMALIZACION DEL TIPO DE TARIFA
+# =============================================================================
+
+def normalizar_tipo_tarifa(texto: str) -> ContractType:
+    """
+    Convierte cualquier texto de tipo de tarifa al valor
+    estandar del modelo interno (2.0TD o 3.0TD).
+
+    Ejemplos:
+        "2.0TD"                    -> ContractType.TD_2_0
+        "Mercat Lliure"            -> ContractType.TD_2_0
+        "Tarifa 2.0TD Libre"       -> ContractType.TD_2_0
+        "3.0TD"                    -> ContractType.TD_3_0
+        "Mercado Libre 3.0"        -> ContractType.TD_3_0
+        None                       -> ContractType.TD_2_0 (por defecto)
+    """
+    if not texto:
+        return ContractType.TD_2_0
+
+    texto_lower = texto.lower().strip()
+
+    # Si contiene 3.0 o 3,0 es tarifa pyme 3.0TD
+    if '3.0' in texto_lower or '3,0' in texto_lower:
+        return ContractType.TD_3_0
+
+    # Cualquier otro caso -> 2.0TD (doméstico)
+    return ContractType.TD_2_0
+
+
+def normalizar_datos_extraidos(datos: dict) -> dict:
+    """
+    Normaliza todos los campos del JSON extraido al formato
+    estandar del modelo interno.
+
+    Aplica:
+        - Normalizacion del tipo de tarifa
+        - Limpieza del CUPS (eliminar espacios)
+        - Conversion de strings a float donde corresponde
+    """
+    # Normalizar tipo de tarifa
+    tipo_raw = datos.get('contrato', {}).get('tipo_tarifa', '')
+    tipo_normalizado = normalizar_tipo_tarifa(tipo_raw)
+    datos['contrato']['tipo_tarifa_normalizado'] = tipo_normalizado.value
+    datos['contrato']['tipo_tarifa_raw']         = tipo_raw
+
+    print(f"  Tipo tarifa: '{tipo_raw}' -> {tipo_normalizado.value}")
+
+    # Limpiar CUPS (eliminar espacios y caracteres extraños)
+    cups = datos.get('contrato', {}).get('cups', '')
+    if cups:
+        cups_limpio = cups.replace(' ', '').replace('-', '').upper()
+        datos['contrato']['cups'] = cups_limpio
+        if cups != cups_limpio:
+            print(f"  CUPS limpiado: '{cups}' -> '{cups_limpio}'")
+
+    # Asegurar que los valores numericos son float
+    campos_float = [
+        ('contrato', 'potencia_contratada_p1_kw'),
+        ('contrato', 'potencia_contratada_p2_kw'),
+        ('consumo',  'total_kwh'),
+        ('consumo',  'p1_punta_kwh'),
+        ('consumo',  'p2_llano_kwh'),
+        ('consumo',  'p3_valle_kwh'),
+        ('precios_energia', 'precio_p1_eur_kwh'),
+        ('precios_energia', 'precio_p2_eur_kwh'),
+        ('precios_energia', 'precio_p3_eur_kwh'),
+        ('precios_potencia', 'precio_p1_eur_kw_dia'),
+        ('precios_potencia', 'precio_p2_eur_kw_dia'),
+        ('importes', 'total_factura_eur'),
+        ('importes', 'energia_total_eur'),
+        ('importes', 'termino_fijo_total_eur'),
+        ('importes', 'alquiler_contador_eur'),
+        ('importes', 'impuesto_electrico_eur'),
+        ('importes', 'iva_eur'),
+    ]
+
+    for seccion, campo in campos_float:
+        val = datos.get(seccion, {}).get(campo)
+        if val is not None:
+            try:
+                datos[seccion][campo] = float(str(val).replace(',', '.'))
+            except (ValueError, TypeError):
+                pass
+
+    return datos

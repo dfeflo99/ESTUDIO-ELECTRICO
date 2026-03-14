@@ -251,12 +251,6 @@ def chart_exceso_table(data: dict) -> go.Figure:
 # =============================================================================
 
 def chart_suggested_options(data: dict) -> go.Figure:
-    """
-    Dos tarjetas lado a lado:
-    - Amarilla: 3.45 kW (equilibrada)
-    - Verde: 4.6 kW (segura)
-    Cada una muestra horas de exceso restantes y descripcion.
-    """
     opciones = data.get('opciones_sugeridas', {})
     if not opciones:
         return go.Figure()
@@ -267,16 +261,11 @@ def chart_suggested_options(data: dict) -> go.Figure:
     fig = go.Figure()
 
     # Opcion equilibrada
-    excesos_eq = eq.get('horas_exceso_p1', 0)
-    texto_eq = (
-        f"<b>{eq.get('titulo','')}</b><br><br>"
-        f"Horas de exceso restantes P1: <b>{excesos_eq}</b><br>"
-        f"Horas de exceso restantes P2: <b>{eq.get('horas_exceso_p2',0)}</b><br><br>"
-        f"{eq.get('descripcion','')}"
-    )
-
     fig.add_annotation(
-        text=texto_eq,
+        text=(
+            f"<b>{eq.get('titulo','')}</b><br><br>"
+            f"{eq.get('descripcion','')}"
+        ),
         xref='paper', yref='paper', x=0.25, y=0.55,
         showarrow=False,
         font=dict(size=13, color='#78350F',
@@ -288,16 +277,11 @@ def chart_suggested_options(data: dict) -> go.Figure:
     )
 
     # Opcion segura
-    excesos_seg = seg.get('horas_exceso_p1', 0)
-    texto_seg = (
-        f"<b>{seg.get('titulo','')}</b><br><br>"
-        f"Horas de exceso restantes P1: <b>{excesos_seg}</b><br>"
-        f"Horas de exceso restantes P2: <b>{seg.get('horas_exceso_p2',0)}</b><br><br>"
-        f"{seg.get('descripcion','')}"
-    )
-
     fig.add_annotation(
-        text=texto_seg,
+        text=(
+            f"<b>{seg.get('titulo','')}</b><br><br>"
+            f"{seg.get('descripcion','')}"
+        ),
         xref='paper', yref='paper', x=0.75, y=0.55,
         showarrow=False,
         font=dict(size=13, color='#064E3B',

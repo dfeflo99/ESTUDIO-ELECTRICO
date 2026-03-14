@@ -150,7 +150,7 @@ def pdf_to_images_base64(pdf_path: str) -> list:
         import PIL.Image
 
         print(f"  Convirtiendo PDF a imagenes: {pdf_path}")
-        imagenes = convert_from_path(pdf_path, dpi=200)
+        imagenes = convert_from_path(pdf_path, dpi=100)
 
         imagenes_b64 = []
         for i, img in enumerate(imagenes):
@@ -242,7 +242,7 @@ def extract_with_claude(imagenes_b64: list, api_key: str) -> dict:
     print(f"  Enviando {len(imagenes_b64)} imagen(es) a Claude...")
 
     response = client.messages.create(
-        model     = "claude-sonnet-4-20250514",
+        model     = "claude-haiku-4-5-20251001",
         max_tokens= 4096,
         messages  = [{"role": "user", "content": content}]
     )

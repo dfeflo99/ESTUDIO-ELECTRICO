@@ -242,7 +242,7 @@ def extract_with_claude(imagenes_b64: list, api_key: str) -> dict:
     print(f"  Enviando {len(imagenes_b64)} imagen(es) a Claude...")
 
     response = client.messages.create(
-        model     = "claude-haiku-4-5-20251001",
+        model     = "claude-sonnet-4-20250514",
         max_tokens= 4096,
         messages  = [{"role": "user", "content": content}]
     )

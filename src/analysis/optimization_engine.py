@@ -167,7 +167,7 @@ def run_optimization_analysis(analysis: ElectricityAnalysis,
             })
 
     # ----------------------------------------------------------------
-    # OPCIONES SUGERIDAS — solo 3.45 y 4.6
+    # OPCIONES SUGERIDAS — calculadas automaticamente con los datos reales
     # ----------------------------------------------------------------
 
     def horas_exceso_con(potencias, umbral):
@@ -176,33 +176,54 @@ def run_optimization_analysis(analysis: ElectricityAnalysis,
     def meses_exceso_con(picos, umbral_campo, umbral_val):
         return sum(1 for p in picos if p[umbral_campo] > umbral_val)
 
+    # Opcion equilibrada: primera potencia comercial que cubre el 90% del maximo
+    # Representa cubrir la mayoria de situaciones sin llegar al pico excepcional
+    max_punta = max((p['pico_punta'] for p in picos_mensuales if p['pico_punta'] > 0), default=0)
+    max_valle = max((p['pico_valle'] for p in picos_mensuales if p['pico_valle'] > 0), default=0)
+
+    p1_equilibrada = _primera_potencia_sobre(max_punta * 0.90)
+    p2_equilibrada = _primera_potencia_sobre(max_valle * 0.90)
+
+    # Opcion segura: primera potencia comercial que cubre el maximo absoluto
+    p1_segura = _primera_potencia_sobre(max_punta)
+    p2_segura = _primera_potencia_sobre(max_valle)
+
+    # Si equilibrada y segura coinciden, buscar la anterior para equilibrada
+    if p1_equilibrada == p1_segura:
+        idx = POTENCIAS_COMERCIALES.index(p1_segura)
+        p1_equilibrada = POTENCIAS_COMERCIALES[max(0, idx - 1)]
+    if p2_equilibrada == p2_segura:
+        idx = POTENCIAS_COMERCIALES.index(p2_segura)
+        p2_equilibrada = POTENCIAS_COMERCIALES[max(0, idx - 1)]
+
     opciones_sugeridas = {
         'equilibrada': {
-            'p1':               3.45,
-            'p2':               3.45,
-            'horas_exceso_p1':  horas_exceso_con(potencias_p1, 3.45),
-            'horas_exceso_p2':  horas_exceso_con(potencias_p2, 3.45),
-            'meses_exceso_p1':  meses_exceso_con(picos_mensuales, 'pico_punta', 3.45),
-            'meses_exceso_p2':  meses_exceso_con(picos_mensuales, 'pico_valle', 3.45),
-            'titulo':           '3.45 kW — Opcion equilibrada',
+            'p1':               p1_equilibrada,
+            'p2':               p2_equilibrada,
+            'horas_exceso_p1':  horas_exceso_con(potencias_p1, p1_equilibrada),
+            'horas_exceso_p2':  horas_exceso_con(potencias_p2, p2_equilibrada),
+            'meses_exceso_p1':  meses_exceso_con(picos_mensuales, 'pico_punta', p1_equilibrada),
+            'meses_exceso_p2':  meses_exceso_con(picos_mensuales, 'pico_valle', p2_equilibrada),
+            'titulo':           f"{p1_equilibrada} kW — Opcion equilibrada",
             'descripcion':      (
-                "Cubre la gran mayoria de situaciones habituales. "
+                f"Cubre la gran mayoria de situaciones habituales "
+                f"(90% del pico maximo registrado: {_round4(max_punta * 0.90)} kW). "
                 "Pueden producirse excesos en momentos muy puntuales "
                 "donde coincidan varios electrodomesticos de alta potencia. "
                 "Es la opcion mas economica con un riesgo bajo."
             ),
         },
         'segura': {
-            'p1':               4.6,
-            'p2':               4.6,
-            'horas_exceso_p1':  horas_exceso_con(potencias_p1, 4.6),
-            'horas_exceso_p2':  horas_exceso_con(potencias_p2, 4.6),
-            'meses_exceso_p1':  meses_exceso_con(picos_mensuales, 'pico_punta', 4.6),
-            'meses_exceso_p2':  meses_exceso_con(picos_mensuales, 'pico_valle', 4.6),
-            'titulo':           '4.6 kW — Opcion segura',
+            'p1':               p1_segura,
+            'p2':               p2_segura,
+            'horas_exceso_p1':  horas_exceso_con(potencias_p1, p1_segura),
+            'horas_exceso_p2':  horas_exceso_con(potencias_p2, p2_segura),
+            'meses_exceso_p1':  meses_exceso_con(picos_mensuales, 'pico_punta', p1_segura),
+            'meses_exceso_p2':  meses_exceso_con(picos_mensuales, 'pico_valle', p2_segura),
+            'titulo':           f"{p1_segura} kW — Opcion segura",
             'descripcion':      (
-                "Cubre absolutamente todos los picos registrados "
-                "incluyendo los mas excepcionales. "
+                f"Cubre absolutamente todos los picos registrados "
+                f"incluyendo el maximo absoluto ({max_punta} kW). "
                 "Sin ningun riesgo de excesos. "
                 "Adecuada si quieres total tranquilidad."
             ),

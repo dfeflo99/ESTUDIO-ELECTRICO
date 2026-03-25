@@ -1,7 +1,8 @@
 # =============================================================================
 # src/models/internal_data_model.py
 # Modelo interno central del sistema de análisis eléctrico
-# Versión: 1.0
+# Versión: 2.0
+# Compatible con 2.0TD + 3.0TD
 # =============================================================================
 
 from dataclasses import dataclass, field
@@ -18,37 +19,44 @@ class ClientType(Enum):
     DOMESTIC = "domestic"       # Hogar
     BUSINESS = "business"       # Pyme
 
+
 class ContractType(Enum):
     TD_2_0 = "2.0TD"            # Doméstico — hasta 15kW
     TD_3_0 = "3.0TD"            # Pyme — más de 15kW
+
 
 class DataSource(Enum):
     CSV    = "csv"              # Datos cargados desde CSV
     OCR    = "ocr"              # Datos extraídos de factura por OCR
     MANUAL = "manual"           # Datos introducidos manualmente por el usuario
 
+
 class EnergyPeriod(Enum):
     """
-    Periodos para el coste de ENERGÍA (consumo) en tarifa 2.0TD.
-    Dependen de hora, día de la semana y festivos.
-    - P1 Punta:  Lunes-Viernes 10h-14h y 18h-22h
-    - P2 Llano:  Lunes-Viernes 8h-10h, 14h-18h, 22h-24h
-    - P3 Valle:  Lunes-Viernes 0h-8h + sábados, domingos y festivos (todo el día)
-    """
-    P1 = "P1"   # Punta
-    P2 = "P2"   # Llano
-    P3 = "P3"   # Valle
-
-class PowerPeriod(Enum):
-    """
-    Periodos para el coste de POTENCIA (maxímetro) en tarifa 2.0TD.
-    - P1: Lunes-Viernes 8h-24h (no festivos)
-    - P2: Lunes-Viernes 0h-8h + sábados, domingos y festivos (todo el día)
-    Nota: los festivos dependen de la provincia del cliente.
-    Se calculan usando la librería `holidays` con la comunidad autónoma correspondiente.
+    Periodos de energía.
+    2.0TD usa normalmente P1/P2/P3.
+    3.0TD usa P1/P2/P3/P4/P5/P6.
     """
     P1 = "P1"
     P2 = "P2"
+    P3 = "P3"
+    P4 = "P4"
+    P5 = "P5"
+    P6 = "P6"
+
+
+class PowerPeriod(Enum):
+    """
+    Periodos de potencia.
+    2.0TD usa normalmente P1/P2.
+    3.0TD usa P1/P2/P3/P4/P5/P6.
+    """
+    P1 = "P1"
+    P2 = "P2"
+    P3 = "P3"
+    P4 = "P4"
+    P5 = "P5"
+    P6 = "P6"
 
 
 # =============================================================================
@@ -59,7 +67,7 @@ class PowerPeriod(Enum):
 class ClientProfile:
     client_type:   ClientType
     contract_type: ContractType
-    province:      str              # Provincia (determina festivos autonómicos)
+    province:      str
     name:          Optional[str] = None
     email:         Optional[str] = None
 
@@ -70,92 +78,146 @@ class ClientProfile:
 
 @dataclass
 class ContractedPowers:
-    """Potencias contratadas por periodo (en kW). En 2.0TD son 2 periodos."""
-    p1: float                       # kW contratados en P1
-    p2: float                       # kW contratados en P2
+    """
+    Potencias contratadas por periodo (kW).
+
+    Compatibilidad:
+    - 2.0TD: usa p1 y p2
+    - 3.0TD: usa p1..p6
+    """
+    p1: float = 0.0
+    p2: float = 0.0
+    p3: float = 0.0
+    p4: float = 0.0
+    p5: float = 0.0
+    p6: float = 0.0
+
+    def as_dict(self) -> dict:
+        return {
+            "P1": self.p1,
+            "P2": self.p2,
+            "P3": self.p3,
+            "P4": self.p4,
+            "P5": self.p5,
+            "P6": self.p6,
+        }
+
+    def active_periods(self, contract_type: Optional[ContractType] = None) -> dict:
+        if contract_type == ContractType.TD_2_0:
+            return {"P1": self.p1, "P2": self.p2}
+        if contract_type == ContractType.TD_3_0:
+            return self.as_dict()
+
+        # Si no se indica contrato, devolvemos solo los periodos con valor > 0
+        data = self.as_dict()
+        activos = {k: v for k, v in data.items() if v not in (None, 0)}
+        return activos if activos else {"P1": self.p1, "P2": self.p2}
+
 
 @dataclass
 class ContractInfo:
-    cups:              Optional[str]            # Código universal del punto de suministro
-    distributor:       Optional[str]            # Distribuidora (Iberdrola, Endesa...)
-    marketer:          Optional[str]            # Comercializadora actual
+    cups:              Optional[str]
+    distributor:       Optional[str]
+    marketer:          Optional[str]
     contracted_powers: ContractedPowers
-    meter_rental:      Optional[float] = None   # Alquiler del contador (€/mes)
+    meter_rental:      Optional[float] = None
 
 
 # =============================================================================
-# BLOQUE 3 — REGISTRO HORARIO (unidad básica de datos)
+# BLOQUE 3 — REGISTRO HORARIO
 # =============================================================================
 
 @dataclass
 class HourlyRecord:
     """
-    Un registro de consumo por hora.
-    Es la unidad mínima de datos del sistema.
-    Todos los análisis y gráficos se construyen a partir de estos registros.
+    Registro horario base del sistema.
+
+    Compatibilidad:
+    - 2.0TD:
+        * hora origen habitual: 1-24
+        * consumo principal: consumption_kwh
+        * periodos: energía P1/P2/P3, potencia P1/P2
+    - 3.0TD:
+        * hora origen habitual: 0-23
+        * si aparece 24 se normalizará en el loader
+        * energía P1..P6
+        * potencia P1..P6
+        * campos extra opcionales: exportación, autoconsumo, reactiva, estimado
     """
     # Identificación temporal
-    timestamp:        datetime          # Fecha y hora exacta
-    hour:             int               # Hora del día (1-24)
-    day_of_month:     int               # Día del mes (1-31)
-    day_of_week:      str               # Nombre del día (lunes, martes...)
-    day_of_week_num:  int               # Número del día (0=lunes, 6=domingo)
-    month:            int               # Número del mes (1-12)
-    month_name:       str               # Nombre del mes (enero, febrero...)
-    is_weekend:       bool              # True si es sábado o domingo
-    is_holiday:       bool              # True si es festivo (nacional o autonómico)
+    timestamp:        datetime
+    hour:             int               # Hora normalizada para análisis (0-23)
+    day_of_month:     int
+    day_of_week:      str
+    day_of_week_num:  int               # 0=lunes, 6=domingo
+    month:            int
+    month_name:       str
+    is_weekend:       bool
+    is_holiday:       bool
 
-    # Consumo
-    consumption_kwh:  float             # Consumo en kWh (AE_kWh en Power BI)
+    # Consumo principal
+    consumption_kwh:  float             # Energía activa importada
 
-    # Periodos (calculados a partir de timestamp + festivos)
-    energy_period:    EnergyPeriod      # P1/P2/P3 — para coste de energía
-    power_period:     PowerPeriod       # P1/P2    — para coste de potencia
+    # Periodos calculados
+    energy_period:    EnergyPeriod
+    power_period:     PowerPeriod
 
     # Flags de análisis
-    exceeds_2kw:      bool = False      # True si consumption_kwh > 2 (Supera_2kW_flag)
+    exceeds_2kw:      bool = False
+
+    # Metadatos opcionales del CSV
+    source_hour_raw:          Optional[int] = None   # Hora original tal como venía en el CSV
+    is_estimated:            Optional[bool] = None   # REAL/ESTIMADO -> True si estimado
+    real_or_estimated:       Optional[str] = None    # "R" / "E"
+
+    # Campos opcionales 3.0TD
+    export_kwh:              float = 0.0            # AS_KWh
+    self_consumption_kwh:    float = 0.0            # AE_AUTOCONS_kWh
+    reactive_r1_kvarh:       float = 0.0
+    reactive_r2_kvarh:       float = 0.0
+    reactive_r3_kvarh:       float = 0.0
+    reactive_r4_kvarh:       float = 0.0
 
 
 # =============================================================================
-# BLOQUE 4 — DATOS DE POTENCIA MÁXIMA (del CSV de potencia)
+# BLOQUE 4 — POTENCIA MÁXIMA MENSUAL
 # =============================================================================
 
 @dataclass
 class MonthlyMaxPower:
     """
     Potencia máxima registrada por periodo y mes.
-    Viene del CSV 'Potencia máxima demandada'.
+
+    Compatibilidad:
+    - 2.0TD: period puede venir como "Punta", "Valle", "Pot.Max"
+    - 3.0TD: period puede venir como "P1".."P6" o "Pot.Max"
     """
-    month:          str             # Formato "ene-25", "feb-25"...
-    month_num:      int             # Número del mes
+    month:          str
+    month_num:      int
     year:           int
-    period:         str             # "Punta", "Valle", "Pot.Max"
-    max_kw:         float           # Potencia máxima registrada (kW)
-    date:           datetime        # Fecha y hora exacta del pico
+    period:         str
+    max_kw:         float
+    date:           datetime
 
 
 # =============================================================================
-# BLOQUE 5 — RESÚMENES DE CONSUMO (para gráficos y KPIs)
+# BLOQUE 5 — RESÚMENES DE CONSUMO
 # =============================================================================
 
 @dataclass
 class PeriodConsumptionSummary:
-    """Resumen de consumo por periodo energético."""
     period:             EnergyPeriod
     total_kwh:          float
     avg_kwh_per_hour:   float
-    pct_of_total:       float           # % del consumo total
+    pct_of_total:       float
+
 
 @dataclass
 class ConsumptionSummary:
-    """
-    Resumen global del consumo.
-    Alimenta los KPIs y gráficos de la página 'Perfil de consumo general'.
-    """
     # KPIs principales
-    total_kwh:              float       # Consumo Total
-    avg_daily_kwh:          float       # Consumo_Promedio_Diario
-    avg_hourly_kwh:         float       # Consumo_Promedio_Hora
+    total_kwh:              float
+    avg_daily_kwh:          float
+    avg_hourly_kwh:         float
 
     # Rango temporal
     date_from:              datetime
@@ -163,140 +225,145 @@ class ConsumptionSummary:
     total_days:             int
 
     # Agregaciones para gráficos
-    by_month:               dict        # {mes: total_kwh} → gráfico por mes
-    by_hour:                dict        # {hora: total_kwh} → gráfico por hora
-    by_day_of_week:         dict        # {dia: total_kwh} → gráfico por día semana
-    by_day_of_month:        dict        # {dia_mes: total_kwh} → gráfico por día mes
-    by_hour_and_date:       dict        # {fecha+hora: kwh} → gráfico detallado
+    by_month:               dict
+    by_hour:                dict
+    by_day_of_week:         dict
+    by_day_of_month:        dict
+    by_hour_and_date:       dict
 
     # Por periodo energético
-    by_energy_period:       dict        # {"P1": PeriodConsumptionSummary, ...}
+    by_energy_period:       dict
 
 
 # =============================================================================
-# BLOQUE 6 — ANÁLISIS DE POTENCIA (para gráficos y KPIs de potencia)
+# BLOQUE 6 — ANÁLISIS DE POTENCIA
 # =============================================================================
 
 @dataclass
 class PowerAnalysis:
-    """
-    Resultado del análisis de potencia real y contratada.
-    Alimenta la página 'Perfil de potencia real' y 'Optimización de potencia contratada'.
-    """
     # KPIs principales
-    max_power_kw:               float       # Máx. de Potencia
-    p99_power_kw:               float       # P99 (percentil 99 de potencia)
-    load_factor:                float       # Factor_Carga = AVERAGE / MAX
-    hours_exceeds_2kw:          int         # Horas_Supera_2kW
-    pct_exceeds_2kw:            float       # Porcentaje_Supera_2kW
+    max_power_kw:               float
+    p99_power_kw:               float
+    load_factor:                float
+    hours_exceeds_2kw:          int
+    pct_exceeds_2kw:            float
 
-    # Potencia diaria (para gráfico línea día a día)
-    daily_max_power:            dict        # {fecha: max_kw} → gráfico potencia diaria
+    # Potencia diaria
+    daily_max_power:            dict
 
-    # Heatmap hora x día del mes (para tabla con colores)
-    hourly_power_heatmap:       dict        # {(hora, dia_mes): kwh}
+    # Heatmap hora x día
+    hourly_power_heatmap:       dict
 
-    # Ranking de potencia (para curva de ranking)
-    power_ranking:              list        # Lista ordenada de mayor a menor potencia
+    # Ranking
+    power_ranking:              list
 
-    # Registros que superan 2kW (para tabla 'Análisis de picos críticos')
-    records_exceeding_2kw:      list        # Lista de HourlyRecord con exceeds_2kw=True
+    # Registros que superan umbral
+    records_exceeding_2kw:      list
 
-    # Potencias contratadas actuales (interactivo — puede cambiar)
+    # Potencias contratadas actuales
     contracted_powers:          ContractedPowers
 
     # Excesos sobre potencia contratada
-    hours_exceeds_p1:           int         # Horas_Supera_P1_Contratada
-    hours_exceeds_p2:           int         # Horas_Supera_P2_Contratada
-    records_exceeding_p1:       list        # Registros con Exceso_P1 > 0
-    records_exceeding_p2:       list        # Registros con Exceso_P2 > 0
+    hours_exceeds_p1:           int
+    hours_exceeds_p2:           int
+    records_exceeding_p1:       list
+    records_exceeding_p2:       list
 
     # Recomendación del sistema
-    recommended_p1_kw:          float       # Potencia P1 recomendada
-    recommended_p2_kw:          float       # Potencia P2 recomendada
-    has_excess_contracted:      bool        # Tiene potencia contratada de más
-    has_deficit_contracted:     bool        # Ha tenido excesos (maxímetro disparado)
-    observations:               list        # Textos explicativos para el usuario
+    recommended_p1_kw:          float
+    recommended_p2_kw:          float
+    has_excess_contracted:      bool
+    has_deficit_contracted:     bool
+    observations:               list
+
+    # Campos extra opcionales para futuro 3.0TD
+    hours_exceeds_p3:           int = 0
+    hours_exceeds_p4:           int = 0
+    hours_exceeds_p5:           int = 0
+    hours_exceeds_p6:           int = 0
+    records_exceeding_p3:       list = field(default_factory=list)
+    records_exceeding_p4:       list = field(default_factory=list)
+    records_exceeding_p5:       list = field(default_factory=list)
+    records_exceeding_p6:       list = field(default_factory=list)
+    recommended_p3_kw:          float = 0.0
+    recommended_p4_kw:          float = 0.0
+    recommended_p5_kw:          float = 0.0
+    recommended_p6_kw:          float = 0.0
 
 
 # =============================================================================
-# BLOQUE 7 — SIMULACIÓN DE COSTES (para página de costes y comparativa)
+# BLOQUE 7 — SIMULACIÓN DE COSTES
 # =============================================================================
 
 @dataclass
 class CostSimulation:
-    """
-    Simulación del coste con una tarifa concreta.
-    Puede usarse para la tarifa actual o para comparar con otras ofertas.
-    Los precios de energía vienen del Excel de comercializadoras o de ESIOS (PVPC).
-    """
     # Identificación de la oferta
     marketer_name:          str
     offer_name:             str
-    is_indexed:             bool        # True si es tarifa indexada (PVPC o similar)
+    is_indexed:             bool
 
     # Precios de energía (€/kWh por periodo)
     price_p1_kwh:           float
     price_p2_kwh:           float
     price_p3_kwh:           float
+    price_p4_kwh:           float = 0.0
+    price_p5_kwh:           float = 0.0
+    price_p6_kwh:           float = 0.0
 
     # Precios de potencia (€/kW/día por periodo)
-    price_power_p1_day:     float
-    price_power_p2_day:     float
+    price_power_p1_day:     float = 0.0
+    price_power_p2_day:     float = 0.0
+    price_power_p3_day:     float = 0.0
+    price_power_p4_day:     float = 0.0
+    price_power_p5_day:     float = 0.0
+    price_power_p6_day:     float = 0.0
 
     # Costes calculados
-    energy_cost:            float       # Coste_Energia
-    power_cost:             float       # Coste_Potencia
-    meter_rental:           float       # Alquiler_Contador
-    electric_tax:           float       # Impuesto_Electrico (5,11273% sobre subtotal)
-    vat:                    float       # IVA (21%)
-    tax_base:               float       # Base_Imponible
-    total_simulated_cost:   float       # Coste_Total_Simulado
+    energy_cost:            float = 0.0
+    power_cost:             float = 0.0
+    meter_rental:           float = 0.0
+    electric_tax:           float = 0.0
+    vat:                    float = 0.0
+    tax_base:               float = 0.0
+    total_simulated_cost:   float = 0.0
 
     # Para comparativa
-    saving_vs_current:      float       # Ahorro respecto a tarifa actual (€)
-    saving_pct:             float       # Ahorro en porcentaje
+    saving_vs_current:      float = 0.0
+    saving_pct:             float = 0.0
 
 
 @dataclass
 class ComparisonReport:
-    """Comparativa de todas las ofertas disponibles."""
-    current_cost:           Optional[float]     # Coste real de la última factura
-    simulations:            list                # Lista de CostSimulation ordenada por ahorro
-    best_offer:             Optional[str]       # Nombre de la mejor oferta
+    current_cost:           Optional[float]
+    simulations:            list
+    best_offer:             Optional[str]
 
 
 # =============================================================================
-# MODELO PRINCIPAL — punto de entrada y salida de todos los motores
+# MODELO PRINCIPAL
 # =============================================================================
 
 @dataclass
 class ElectricityAnalysis:
     """
-    Modelo interno central.
+    Modelo interno central del sistema.
 
-    TODOS los caminos de entrada generan este objeto:
-        CSV  → excel_loader.py    → ElectricityAnalysis
-        OCR  → invoice_ocr.py     → ElectricityAnalysis
-        Form → manual_input.py    → ElectricityAnalysis
-
-    TODOS los motores trabajan sobre este objeto:
-        consumption_engine.py → rellena consumption_summary
-        power_engine.py       → rellena power_analysis
-        comparator.py         → rellena comparison_report
+    CSV  -> excel_loader.py  -> ElectricityAnalysis
+    OCR  -> invoice_ocr.py   -> ElectricityAnalysis
+    Form -> manual_input.py  -> ElectricityAnalysis
     """
-    # Datos de entrada (obligatorios)
+    # Datos de entrada
     client:             ClientProfile
     contract:           Optional[ContractInfo]
-    hourly_records:     list                    # Lista de HourlyRecord
-    monthly_max_power:  list                    # Lista de MonthlyMaxPower
+    hourly_records:     list
+    monthly_max_power:  list
 
-    # Resultados de los motores (se rellenan progresivamente)
-    consumption_summary:    Optional[ConsumptionSummary]    = None
-    power_analysis:         Optional[PowerAnalysis]         = None
-    comparison_report:      Optional[ComparisonReport]      = None
+    # Resultados de motores
+    consumption_summary:    Optional[ConsumptionSummary] = None
+    power_analysis:         Optional[PowerAnalysis] = None
+    comparison_report:      Optional[ComparisonReport] = None
 
     # Metadatos
-    data_source:    DataSource  = DataSource.CSV
-    created_at:     datetime    = field(default_factory=datetime.now)
-    is_complete:    bool        = False     # True cuando todos los análisis están hechos
+    data_source:    DataSource = DataSource.CSV
+    created_at:     datetime = field(default_factory=datetime.now)
+    is_complete:    bool = False

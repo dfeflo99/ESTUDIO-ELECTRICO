@@ -1,477 +1,353 @@
 # =============================================================================
-# src/analysis/optimization_engine.py
-# Motor de optimizacion de potencia contratada
+# src/analysis/charts/optimization_charts.py
+# Gráficos de optimización de potencia contratada
 # Compatible con 2.0TD + 3.0TD
 # =============================================================================
 
-from collections import defaultdict
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-from src.models.internal_data_model import (
-    ElectricityAnalysis,
-    ContractType,
-)
 
 # =============================================================================
-# CONFIG
+# CONFIG VISUAL
 # =============================================================================
 
-POTENCIAS_COMERCIALES_2_0 = [2.3, 3.45, 4.6, 5.75, 6.9, 8.05, 9.2, 10.35, 11.5, 14.49]
-
-MESES_NOMBRE = {
-    'ene': 'enero', 'feb': 'febrero', 'mar': 'marzo', 'abr': 'abril',
-    'may': 'mayo', 'jun': 'junio', 'jul': 'julio', 'ago': 'agosto',
-    'sep': 'septiembre', 'oct': 'octubre', 'nov': 'noviembre', 'dic': 'diciembre'
-}
-
-MESES_ORDEN = [
-    'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
-    'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'
-]
+COLOR_RED = "#CC1F1F"
+COLOR_ORANGE = "#F5A623"
+COLOR_BLUE = "#2563EB"
+COLOR_GREEN = "#16A34A"
+COLOR_GRAY = "#6B7280"
+COLOR_LIGHT = "#F3F4F6"
+COLOR_DARK = "#111827"
 
 
 # =============================================================================
 # HELPERS
 # =============================================================================
 
-def _round4(val):
-    return round(val, 4)
-
-def _round2(val):
-    return round(val, 2)
+def _is_3_0(opt_result: dict) -> bool:
+    return opt_result.get("contract_type") == "3.0TD"
 
 
-def _get_period_order(contract_type: ContractType):
-    if contract_type == ContractType.TD_3_0:
+def _alias_periodo_2(opt_result: dict) -> str:
+    return opt_result.get("alias_periodo_2", "P3")
+
+
+def _ordered_periods(opt_result: dict):
+    if _is_3_0(opt_result):
         return ["P1", "P2", "P3", "P4", "P5", "P6"]
-    return ["P1", "P3"]
+    return ["P1", _alias_periodo_2(opt_result)]
 
 
-def _get_month_name(month_text: str) -> str:
-    """
-    Convierte:
-    - ene-25 -> enero
-    - feb-24 -> febrero
-    - 02-2024 -> feb (si viniera algo raro, mantiene aproximacion)
-    """
-    text = str(month_text).strip().lower()
-    corto = text[:3]
-    return MESES_NOMBRE.get(corto, corto)
-
-
-def _get_contracted_periods(
-    analysis: ElectricityAnalysis,
-    contract_type: ContractType,
-    contracted_p1=None,
-    contracted_p2=None,
-    contracted_p3=None,
-    contracted_p4=None,
-    contracted_p5=None,
-    contracted_p6=None,
-):
-    base = analysis.contract.contracted_powers if analysis.contract else None
-
-    def pick(attr, explicit):
-        if explicit is not None:
-            return float(explicit)
-        if base is not None:
-            return float(getattr(base, attr, 0.0) or 0.0)
-        return 0.0
-
-    contracted = {
-        "P1": pick("p1", contracted_p1),
-        "P2": pick("p2", contracted_p2),
-        "P3": pick("p3", contracted_p3),
-        "P4": pick("p4", contracted_p4),
-        "P5": pick("p5", contracted_p5),
-        "P6": pick("p6", contracted_p6),
-    }
-
-    if contract_type == ContractType.TD_2_0:
-        # En tu proyecto 2.0TD usa P1 y P3
-        if contracted_p2 is not None and contracted["P3"] == 0.0:
-            contracted["P3"] = float(contracted_p2)
-        return {"P1": contracted["P1"], "P3": contracted["P3"]}
-
-    return {p: contracted[p] for p in ["P1", "P2", "P3", "P4", "P5", "P6"]}
-
-
-def _primera_potencia_sobre_2_0(kw):
-    for p in POTENCIAS_COMERCIALES_2_0:
-        if p >= kw:
-            return p
-    return POTENCIAS_COMERCIALES_2_0[-1]
-
-
-def _potencia_objetivo(kw: float, contract_type: ContractType):
-    if contract_type == ContractType.TD_2_0:
-        return _primera_potencia_sobre_2_0(kw)
-    return _round2(kw)
-
-
-def _hours_excess_with(records, periodo: str, umbral: float) -> int:
-    return sum(
-        1 for r in records
-        if r.power_period.value == periodo and r.consumption_kwh > umbral
-    )
-
-
-def _max_monthly_official_by_period(monthly_max_power: list, period: str) -> float:
-    vals = [r.max_kw for r in monthly_max_power if r.period == period]
-    return _round4(max(vals)) if vals else 0.0
-
-
-def _build_monthly_peaks(monthly_max_power: list, contract_type: ContractType, contracted: dict):
-    """
-    Construye:
-    - lista mensual ordenada
-    - compatibilidad con charts antiguos (pico_punta / pico_valle)
-    - detalle completo por periodos
-    """
-    period_order = _get_period_order(contract_type)
-
-    # Agrupar por mes
-    picos_por_mes = {}
-    month_num_by_mes = {}
-
-    for r in monthly_max_power:
-        mes_nombre = _get_month_name(r.month)
-        if mes_nombre not in picos_por_mes:
-            picos_por_mes[mes_nombre] = {}
-            month_num_by_mes[mes_nombre] = r.month_num
-        picos_por_mes[mes_nombre][r.period] = _round4(r.max_kw)
-
-    meses_ordenados = sorted(
-        picos_por_mes.keys(),
-        key=lambda m: month_num_by_mes.get(m, 99)
-    )
-
-    picos_mensuales = []
-    for mes in meses_ordenados:
-        datos = picos_por_mes[mes]
-
-        row = {
-            "mes": mes,
-            "month_num": month_num_by_mes.get(mes, 99),
-            "pot_max": datos.get("Pot.Max", 0.0),
-            "periodos": {},
-        }
-
-        for p in period_order:
-            pico = _round4(datos.get(p, 0.0))
-            contratado = _round4(contracted.get(p, 0.0))
-            supera = (contratado > 0 and pico > contratado)
-            exceso = _round4(pico - contratado) if supera else 0.0
-
-            row["periodos"][p] = {
-                "pico_kw": pico,
-                "contracted_kw": contratado,
-                "supera": supera,
-                "exceso_kw": exceso,
-            }
-
-        # Alias para compatibilidad con charts viejos:
-        # - 2.0TD: punta=P1, valle=P3
-        # - 3.0TD: punta=P1, valle=P6 (solo como alias visual temporal)
-        if contract_type == ContractType.TD_2_0:
-            alias_2 = "P3"
-        else:
-            alias_2 = "P6"
-
-        row["pico_punta"] = row["periodos"].get("P1", {}).get("pico_kw", 0.0)
-        row["pico_valle"] = row["periodos"].get(alias_2, {}).get("pico_kw", 0.0)
-        row["supera_p1"] = row["periodos"].get("P1", {}).get("supera", False)
-        row["supera_p2"] = row["periodos"].get(alias_2, {}).get("supera", False)
-        row["exceso_p1"] = row["periodos"].get("P1", {}).get("exceso_kw", 0.0)
-        row["exceso_p2"] = row["periodos"].get(alias_2, {}).get("exceso_kw", 0.0)
-
-        picos_mensuales.append(row)
-
-    return picos_mensuales
-
-
-def _build_excess_table(picos_mensuales: list, contract_type: ContractType):
-    tabla = []
-
-    if contract_type == ContractType.TD_2_0:
-        alias_2 = "P3"
-        alias_2_label = "P3"
-    else:
-        alias_2 = "P6"
-        alias_2_label = "P6"
-
-    for p in picos_mensuales:
-        if p["supera_p1"] or p["supera_p2"]:
-            row = {
-                "mes": p["mes"].capitalize(),
-                "pico_punta": f"{p['pico_punta']} kW",
-                "exceso_p1": f"+{p['exceso_p1']} kW" if p["supera_p1"] else "—",
-                "pico_valle": f"{p['pico_valle']} kW",
-                "exceso_p2": f"+{p['exceso_p2']} kW" if p["supera_p2"] else "—",
-                "supera_p1": p["supera_p1"],
-                "supera_p2": p["supera_p2"],
-                "alias_periodo_2": alias_2_label,
-            }
-            tabla.append(row)
-
-    # Tabla completa extra para futuro 3.0TD
-    tabla_full = []
-    for p in picos_mensuales:
-        for periodo, info in p["periodos"].items():
-            if info["supera"]:
-                tabla_full.append({
-                    "mes": p["mes"].capitalize(),
-                    "periodo": periodo,
-                    "pico_kw": info["pico_kw"],
-                    "contracted_kw": info["contracted_kw"],
-                    "exceso_kw": info["exceso_kw"],
-                })
-
-    return tabla, tabla_full
-
-
-def _build_suggested_options(
-    analysis: ElectricityAnalysis,
-    contract_type: ContractType,
-    contracted: dict,
-    picos_mensuales: list,
-):
-    period_order = _get_period_order(contract_type)
-    records = analysis.hourly_records
-
-    max_by_period = {}
-    for p in period_order:
-        vals = [m["periodos"][p]["pico_kw"] for m in picos_mensuales if p in m["periodos"]]
-        max_by_period[p] = _round4(max(vals)) if vals else 0.0
-
-    # Equilibrada = 90% del maximo
-    # Segura      = 100% del maximo
-    eq = {}
-    sg = {}
-
-    for p in period_order:
-        eq[p] = _potencia_objetivo(max_by_period[p] * 0.90, contract_type)
-        sg[p] = _potencia_objetivo(max_by_period[p], contract_type)
-
-        # Si coinciden en 2.0TD, intentamos bajar una escalon la equilibrada
-        if contract_type == ContractType.TD_2_0 and eq[p] == sg[p]:
-            idx = POTENCIAS_COMERCIALES_2_0.index(sg[p]) if sg[p] in POTENCIAS_COMERCIALES_2_0 else 0
-            eq[p] = POTENCIAS_COMERCIALES_2_0[max(0, idx - 1)]
-
-    def meses_exceso_con(picos, periodo, umbral):
-        return sum(1 for m in picos if m["periodos"].get(periodo, {}).get("pico_kw", 0.0) > umbral)
-
-    opciones = {
-        "equilibrada": {
-            "periodos": {},
-            "titulo": "Opcion equilibrada",
-            "descripcion": (
-                "Cubre la gran mayoria de situaciones habituales "
-                "(aprox. 90% del pico maximo registrado por periodo). "
-                "Es la opcion mas economica con un riesgo bajo de excesos puntuales."
-            ),
-        },
-        "segura": {
-            "periodos": {},
-            "titulo": "Opcion segura",
-            "descripcion": (
-                "Cubre el 100% de los picos maximos registrados por periodo. "
-                "Es la opcion con menor riesgo de excesos."
-            ),
-        }
-    }
-
-    for p in period_order:
-        eq_kw = eq[p]
-        sg_kw = sg[p]
-
-        opciones["equilibrada"]["periodos"][p] = {
-            "kw": eq_kw,
-            "horas_exceso": _hours_excess_with(records, p, eq_kw),
-            "meses_exceso": meses_exceso_con(picos_mensuales, p, eq_kw),
-        }
-        opciones["segura"]["periodos"][p] = {
-            "kw": sg_kw,
-            "horas_exceso": _hours_excess_with(records, p, sg_kw),
-            "meses_exceso": meses_exceso_con(picos_mensuales, p, sg_kw),
-        }
-
-    # Alias para compatibilidad con charts viejos
-    alias_2 = "P3" if contract_type == ContractType.TD_2_0 else "P6"
-
-    opciones["equilibrada"]["p1"] = opciones["equilibrada"]["periodos"].get("P1", {}).get("kw", 0.0)
-    opciones["equilibrada"]["p2"] = opciones["equilibrada"]["periodos"].get(alias_2, {}).get("kw", 0.0)
-    opciones["equilibrada"]["horas_exceso_p1"] = opciones["equilibrada"]["periodos"].get("P1", {}).get("horas_exceso", 0)
-    opciones["equilibrada"]["horas_exceso_p2"] = opciones["equilibrada"]["periodos"].get(alias_2, {}).get("horas_exceso", 0)
-    opciones["equilibrada"]["meses_exceso_p1"] = opciones["equilibrada"]["periodos"].get("P1", {}).get("meses_exceso", 0)
-    opciones["equilibrada"]["meses_exceso_p2"] = opciones["equilibrada"]["periodos"].get(alias_2, {}).get("meses_exceso", 0)
-    opciones["equilibrada"]["titulo"] = (
-        f"P1={opciones['equilibrada']['p1']} kW"
-        + (f" / {alias_2}={opciones['equilibrada']['p2']} kW" if alias_2 in period_order else "")
-        + " — Opcion equilibrada"
-    )
-
-    opciones["segura"]["p1"] = opciones["segura"]["periodos"].get("P1", {}).get("kw", 0.0)
-    opciones["segura"]["p2"] = opciones["segura"]["periodos"].get(alias_2, {}).get("kw", 0.0)
-    opciones["segura"]["horas_exceso_p1"] = opciones["segura"]["periodos"].get("P1", {}).get("horas_exceso", 0)
-    opciones["segura"]["horas_exceso_p2"] = opciones["segura"]["periodos"].get(alias_2, {}).get("horas_exceso", 0)
-    opciones["segura"]["meses_exceso_p1"] = opciones["segura"]["periodos"].get("P1", {}).get("meses_exceso", 0)
-    opciones["segura"]["meses_exceso_p2"] = opciones["segura"]["periodos"].get(alias_2, {}).get("meses_exceso", 0)
-    opciones["segura"]["titulo"] = (
-        f"P1={opciones['segura']['p1']} kW"
-        + (f" / {alias_2}={opciones['segura']['p2']} kW" if alias_2 in period_order else "")
-        + " — Opcion segura"
-    )
-
-    return opciones, max_by_period
+def _round2(x):
+    return round(float(x), 2)
 
 
 # =============================================================================
-# FUNCION PRINCIPAL
+# 1. KPIs
 # =============================================================================
 
-def run_optimization_analysis(
-    analysis: ElectricityAnalysis,
-    contracted_p1: float = None,
-    contracted_p2: float = None,
-    contracted_p3: float = None,
-    contracted_p4: float = None,
-    contracted_p5: float = None,
-    contracted_p6: float = None,
-) -> dict:
-    """
-    Analiza optimizacion de potencia contratada.
-    - 2.0TD: P1/P3
-    - 3.0TD: P1..P6
-    """
+def chart_optimization_kpis(opt_result: dict):
+    kpis = opt_result["kpis"]
+    periodos = _ordered_periods(opt_result)
 
-    records = analysis.hourly_records
-    monthly_max_power = analysis.monthly_max_power
-    contract_type = analysis.client.contract_type
+    contracted = kpis.get("contracted_periods", {})
+    maximos = kpis.get("max_picos_por_periodo", {})
+    meses_exceso = kpis.get("meses_exceso_por_periodo", {})
 
-    if not records or not monthly_max_power:
-        print("ERROR: Faltan datos.")
-        return {}
+    labels = []
+    values_current = []
+    values_max = []
 
-    contracted = _get_contracted_periods(
-        analysis=analysis,
-        contract_type=contract_type,
-        contracted_p1=contracted_p1,
-        contracted_p2=contracted_p2,
-        contracted_p3=contracted_p3,
-        contracted_p4=contracted_p4,
-        contracted_p5=contracted_p5,
-        contracted_p6=contracted_p6,
+    for p in periodos:
+        labels.append(p)
+        values_current.append(contracted.get(p, 0.0))
+        values_max.append(maximos.get(p, 0.0))
+
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        subplot_titles=("Potencia contratada vs pico máximo", "Meses con exceso por periodo"),
+        specs=[[{"type": "bar"}, {"type": "bar"}]]
     )
 
-    print("Iniciando analisis de optimizacion...")
-    print(f"  Tipo contrato: {contract_type.value}")
-    print(f"  Potencias actuales: {contracted}")
-
-    # ----------------------------------------------------------------
-    # PICOS OFICIALES POR MES
-    # ----------------------------------------------------------------
-
-    picos_mensuales = _build_monthly_peaks(
-        monthly_max_power=monthly_max_power,
-        contract_type=contract_type,
-        contracted=contracted,
+    fig.add_trace(
+        go.Bar(
+            x=labels,
+            y=values_current,
+            name="Contratada",
+            marker_color=COLOR_BLUE,
+        ),
+        row=1, col=1
     )
 
-    # ----------------------------------------------------------------
-    # TABLAS DE EXCESOS
-    # ----------------------------------------------------------------
-
-    tabla_excesos, tabla_excesos_full = _build_excess_table(
-        picos_mensuales=picos_mensuales,
-        contract_type=contract_type,
+    fig.add_trace(
+        go.Bar(
+            x=labels,
+            y=values_max,
+            name="Pico máximo",
+            marker_color=COLOR_RED,
+        ),
+        row=1, col=1
     )
 
-    # ----------------------------------------------------------------
-    # OPCIONES SUGERIDAS
-    # ----------------------------------------------------------------
-
-    opciones_sugeridas, max_by_period = _build_suggested_options(
-        analysis=analysis,
-        contract_type=contract_type,
-        contracted=contracted,
-        picos_mensuales=picos_mensuales,
+    fig.add_trace(
+        go.Bar(
+            x=labels,
+            y=[meses_exceso.get(p, 0) for p in labels],
+            name="Meses con exceso",
+            marker_color=COLOR_ORANGE,
+        ),
+        row=1, col=2
     )
 
-    # ----------------------------------------------------------------
-    # KPIs
-    # ----------------------------------------------------------------
+    fig.update_layout(
+        title="KPIs de optimización de potencia",
+        barmode="group",
+        template="plotly_white",
+        height=450,
+        legend_title_text=""
+    )
 
-    meses_exceso_por_periodo = {}
-    for p in _get_period_order(contract_type):
-        meses_exceso_por_periodo[p] = sum(
-            1 for m in picos_mensuales if m["periodos"].get(p, {}).get("supera", False)
+    fig.update_yaxes(title_text="kW", row=1, col=1)
+    fig.update_yaxes(title_text="Nº meses", row=1, col=2)
+
+    return fig
+
+
+# =============================================================================
+# 2. BARRAS MENSUALES
+# =============================================================================
+
+def chart_monthly_official_peaks(opt_result: dict):
+    picos = opt_result["picos_mensuales"]
+    periodos = _ordered_periods(opt_result)
+    contracted = opt_result["contracted_periods"]
+
+    meses = [p["mes"].capitalize() for p in picos]
+
+    fig = go.Figure()
+
+    # Barras por periodo
+    for p in periodos:
+        fig.add_trace(
+            go.Bar(
+                x=meses,
+                y=[pico["periodos"].get(p, {}).get("pico_kw", 0.0) for pico in picos],
+                name=f"Pico {p}",
+            )
         )
 
-    alias_2 = "P3" if contract_type == ContractType.TD_2_0 else "P6"
+    # Líneas contratadas
+    for p in periodos:
+        fig.add_trace(
+            go.Scatter(
+                x=meses,
+                y=[contracted.get(p, 0.0)] * len(meses),
+                mode="lines",
+                name=f"Contratada {p}",
+                line=dict(dash="dash")
+            )
+        )
 
-    tiene_exceso = any(v > 0 for v in meses_exceso_por_periodo.values())
+    fig.update_layout(
+        title="Picos oficiales mensuales por periodo",
+        barmode="group",
+        template="plotly_white",
+        height=520,
+        xaxis_title="Mes",
+        yaxis_title="kW",
+        legend_title_text=""
+    )
 
-    mes_max_exceso_p1 = ""
-    mayor_exceso_p1 = -1
-    for m in picos_mensuales:
-        ex = m["periodos"].get("P1", {}).get("exceso_kw", 0.0)
-        if ex > mayor_exceso_p1:
-            mayor_exceso_p1 = ex
-            mes_max_exceso_p1 = m["mes"]
+    return fig
 
-    mes_max_exceso_p2 = ""
-    mayor_exceso_p2 = -1
-    for m in picos_mensuales:
-        ex = m["periodos"].get(alias_2, {}).get("exceso_kw", 0.0)
-        if ex > mayor_exceso_p2:
-            mayor_exceso_p2 = ex
-            mes_max_exceso_p2 = m["mes"]
 
-    kpis = {
-        "contract_type": contract_type.value,
-        "contracted_periods": contracted,
+# =============================================================================
+# 3. TABLA DE EXCESOS
+# =============================================================================
 
-        # Compatibilidad con charts viejos
-        "contracted_p1": contracted.get("P1", 0.0),
-        "contracted_p2": contracted.get(alias_2, 0.0),
+def chart_excess_table(opt_result: dict):
+    if _is_3_0(opt_result):
+        rows = opt_result.get("tabla_excesos_full", [])
+        if not rows:
+            rows = [{
+                "mes": "—",
+                "periodo": "—",
+                "pico_kw": "—",
+                "contracted_kw": "—",
+                "exceso_kw": "—",
+            }]
 
-        "meses_exceso_p1": meses_exceso_por_periodo.get("P1", 0),
-        "meses_exceso_p2": meses_exceso_por_periodo.get(alias_2, 0),
-        "max_pico_punta": max_by_period.get("P1", 0.0),
-        "max_pico_valle": max_by_period.get(alias_2, 0.0),
+        df = pd.DataFrame(rows)
+        cols = ["mes", "periodo", "pico_kw", "contracted_kw", "exceso_kw"]
+        headers = ["Mes", "Periodo", "Pico (kW)", "Contratada (kW)", "Exceso (kW)"]
 
-        "meses_exceso_por_periodo": meses_exceso_por_periodo,
-        "max_picos_por_periodo": max_by_period,
+    else:
+        rows = opt_result.get("tabla_excesos", [])
+        if not rows:
+            rows = [{
+                "mes": "—",
+                "pico_punta": "—",
+                "exceso_p1": "—",
+                "pico_valle": "—",
+                "exceso_p2": "—",
+            }]
 
-        "tiene_exceso": tiene_exceso,
-        "mes_max_exceso_p1": mes_max_exceso_p1,
-        "mes_max_exceso_p2": mes_max_exceso_p2,
+        alias2 = _alias_periodo_2(opt_result)
+        df = pd.DataFrame(rows)
+        cols = ["mes", "pico_punta", "exceso_p1", "pico_valle", "exceso_p2"]
+        headers = ["Mes", "Pico P1", "Exceso P1", f"Pico {alias2}", f"Exceso {alias2}"]
+
+    fig = go.Figure(
+        data=[
+            go.Table(
+                header=dict(
+                    values=headers,
+                    fill_color=COLOR_RED,
+                    font=dict(color="white", size=12),
+                    align="center"
+                ),
+                cells=dict(
+                    values=[df[c] for c in cols],
+                    fill_color="white",
+                    align="center",
+                    font=dict(size=11),
+                    height=28
+                )
+            )
+        ]
+    )
+
+    fig.update_layout(
+        title="Meses con excesos registrados",
+        height=max(350, 60 + len(df) * 28)
+    )
+
+    return fig
+
+
+# =============================================================================
+# 4. TARJETAS OPCIONES SUGERIDAS
+# =============================================================================
+
+def chart_suggested_options(opt_result: dict):
+    opciones = opt_result["opciones_sugeridas"]
+    periodos = _ordered_periods(opt_result)
+
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        subplot_titles=(
+            opciones["equilibrada"]["titulo"],
+            opciones["segura"]["titulo"],
+        ),
+        specs=[[{"type": "table"}, {"type": "table"}]]
+    )
+
+    def build_table_data(op):
+        rows = []
+        for p in periodos:
+            info = op["periodos"].get(p, {})
+            rows.append({
+                "Periodo": p,
+                "kW": info.get("kw", 0.0),
+                "Horas exceso": info.get("horas_exceso", 0),
+                "Meses exceso": info.get("meses_exceso", 0),
+            })
+        return pd.DataFrame(rows)
+
+    df_eq = build_table_data(opciones["equilibrada"])
+    df_sg = build_table_data(opciones["segura"])
+
+    fig.add_trace(
+        go.Table(
+            header=dict(
+                values=list(df_eq.columns),
+                fill_color=COLOR_ORANGE,
+                font=dict(color="white", size=12),
+                align="center"
+            ),
+            cells=dict(
+                values=[df_eq[c] for c in df_eq.columns],
+                fill_color="white",
+                align="center",
+                height=28
+            )
+        ),
+        row=1, col=1
+    )
+
+    fig.add_trace(
+        go.Table(
+            header=dict(
+                values=list(df_sg.columns),
+                fill_color=COLOR_GREEN,
+                font=dict(color="white", size=12),
+                align="center"
+            ),
+            cells=dict(
+                values=[df_sg[c] for c in df_sg.columns],
+                fill_color="white",
+                align="center",
+                height=28
+            )
+        ),
+        row=1, col=2
+    )
+
+    fig.update_layout(
+        title="Opciones sugeridas de potencia contratada",
+        height=450
+    )
+
+    return fig
+
+
+# =============================================================================
+# 5. RESUMEN DE EXCESOS POR PERIODO
+# =============================================================================
+
+def chart_excess_summary(opt_result: dict):
+    kpis = opt_result["kpis"]
+    periodos = _ordered_periods(opt_result)
+    meses_exceso = kpis.get("meses_exceso_por_periodo", {})
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Bar(
+            x=periodos,
+            y=[meses_exceso.get(p, 0) for p in periodos],
+            marker_color=COLOR_RED,
+            text=[meses_exceso.get(p, 0) for p in periodos],
+            textposition="outside",
+            name="Meses con exceso"
+        )
+    )
+
+    fig.update_layout(
+        title="Resumen de meses con exceso por periodo",
+        template="plotly_white",
+        height=420,
+        xaxis_title="Periodo",
+        yaxis_title="Nº meses",
+        showlegend=False
+    )
+
+    return fig
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+def generate_optimization_charts(opt_result: dict):
+    return {
+        "kpis": chart_optimization_kpis(opt_result),
+        "monthly_official": chart_monthly_official_peaks(opt_result),
+        "table_excess": chart_excess_table(opt_result),
+        "suggested_options": chart_suggested_options(opt_result),
+        "summary_excess": chart_excess_summary(opt_result),
     }
-
-    print(f"  Meses con exceso P1: {kpis['meses_exceso_p1']}")
-    print(f"  Meses con exceso alias 2: {kpis['meses_exceso_p2']}")
-    print("  Maximos por periodo:")
-    for p, v in max_by_period.items():
-        print(f"    {p}: {v} kW")
-
-    # ----------------------------------------------------------------
-    # RESULTADO FINAL
-    # ----------------------------------------------------------------
-
-    result = {
-        "contract_type": contract_type.value,
-        "contracted_p1": contracted.get("P1", 0.0),
-        "contracted_p2": contracted.get(alias_2, 0.0),
-        "contracted_periods": contracted,
-        "kpis": kpis,
-        "picos_mensuales": picos_mensuales,
-        "tabla_excesos": tabla_excesos,
-        "tabla_excesos_full": tabla_excesos_full,
-        "opciones_sugeridas": opciones_sugeridas,
-        "alias_periodo_2": alias_2,
-    }
-
-    analysis.optimization_analysis = result
-
-    print("Analisis de optimizacion completado.")
-    return result

@@ -1,292 +1,285 @@
 # =============================================================================
 # src/analysis/peaks_engine.py
-# Motor de analisis de picos criticos
-# Version: 1.0
-#
-# Pagina 3 del informe: Analisis de picos criticos
-#
-# Calcula:
-#   - KPIs: total horas sobre umbral, pico maximo, mes con mas picos,
-#           franja horaria mas repetida
-#   - Top 10 picos mas altos
-#   - Evolucion mensual de picos
-#   - Distribucion por franja horaria
-#   - Mapa de calor picos por mes y hora
-#   - Laborable vs fin de semana
-#   - Por periodo P1/P2
+# Motor de análisis de picos críticos
+# Compatible con 2.0TD + 3.0TD
 # =============================================================================
 
 from collections import defaultdict
-from typing import Optional
 
-import sys
-sys.path.append('..')
-from src.models.internal_data_model import ElectricityAnalysis
+from src.models.internal_data_model import (
+    ElectricityAnalysis,
+    ContractType,
+)
 
-# Orden natural de meses
-MESES_ORDEN = [
-    'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
-    'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'
-]
 
-def _round4(val: float) -> float:
-    return round(val, 4)
+# =============================================================================
+# HELPERS
+# =============================================================================
 
 def _round2(val: float) -> float:
     return round(val, 2)
 
-def _franja_horaria(hora: int) -> str:
-    """Clasifica una hora en franja horaria."""
-    if 0 <= hora < 6:
-        return 'Madrugada (0h-6h)'
-    elif 6 <= hora < 12:
-        return 'Manana (6h-12h)'
-    elif 12 <= hora < 18:
-        return 'Tarde (12h-18h)'
-    else:
-        return 'Noche (18h-24h)'
+
+def _get_period_order(contract_type: ContractType):
+    if contract_type == ContractType.TD_3_0:
+        return ["P1", "P2", "P3", "P4", "P5", "P6"]
+    return ["P1", "P3"]
+
+
+def _get_month_short(month_name: str) -> str:
+    text = str(month_name).strip().lower()
+    return text[:3]
+
+
+def _get_franja(hour: int) -> str:
+    if 0 <= hour < 8:
+        return "00-08"
+    if 8 <= hour < 12:
+        return "08-12"
+    if 12 <= hour < 16:
+        return "12-16"
+    if 16 <= hour < 20:
+        return "16-20"
+    return "20-24"
 
 
 # =============================================================================
 # FUNCION PRINCIPAL
 # =============================================================================
 
-def run_peaks_analysis(analysis: ElectricityAnalysis,
-                       umbral_kw: float = 2.0) -> dict:
-    """
-    Calcula el analisis completo de picos criticos.
-
-    Args:
-        analysis:  ElectricityAnalysis con hourly_records validados
-        umbral_kw: Umbral configurable por el usuario (default: 2.0 kW)
-
-    Returns:
-        Diccionario con todos los calculos listos para los graficos
-    """
+def run_peaks_analysis(
+    analysis: ElectricityAnalysis,
+    umbral_kw: float = 2.0,
+) -> ElectricityAnalysis:
     records = analysis.hourly_records
+    contract_type = analysis.client.contract_type
 
     if not records:
-        print("ERROR: No hay registros para analizar picos.")
-        return {}
+        print("ERROR: No hay registros horarios para analizar.")
+        return analysis
 
-    print(f"Iniciando analisis de picos criticos (umbral: {umbral_kw} kW)...")
-
-    # Filtrar registros que superan el umbral
-    picos = [r for r in records if r.consumption_kwh > umbral_kw]
-    total_picos = len(picos)
-    total_horas = len(records)
-
-    print(f"  Horas sobre umbral: {total_picos} de {total_horas}")
-
-    if not picos:
-        print("  No hay picos por encima del umbral.")
-        return {
-            'umbral_kw':    umbral_kw,
-            'total_picos':  0,
-            'kpis':         {},
-            'top10':        [],
-            'by_month':     {},
-            'by_franja':    {},
-            'heatmap':      {},
-            'by_day_type':  {},
-            'by_period':    {},
-        }
+    print("Iniciando análisis de picos...")
+    print(f"  Umbral configurado: {umbral_kw} kW")
 
     # ----------------------------------------------------------------
-    # KPIs PRINCIPALES
+    # REGISTROS SOBRE UMBRAL
     # ----------------------------------------------------------------
 
-    pico_maximo = max(picos, key=lambda r: r.consumption_kwh)
+    peaks = [r for r in records if r.consumption_kwh > umbral_kw]
+    total_peaks = len(peaks)
+    pct_peaks = _round2((total_peaks / len(records)) * 100) if records else 0.0
 
-    # Mes con mas picos
-    picos_por_mes = defaultdict(int)
-    for r in picos:
-        picos_por_mes[r.month_name] += 1
-    mes_mas_picos = max(picos_por_mes, key=picos_por_mes.get)
-
-    # Franja horaria mas repetida
-    picos_por_franja = defaultdict(int)
-    for r in picos:
-        picos_por_franja[_franja_horaria(r.timestamp.hour)] += 1
-    franja_mas_repetida = max(picos_por_franja, key=picos_por_franja.get)
-
-    # Hora exacta mas repetida
-    picos_por_hora = defaultdict(int)
-    for r in picos:
-        picos_por_hora[r.timestamp.hour] += 1
-    hora_mas_repetida = max(picos_por_hora, key=picos_por_hora.get)
-
-    kpis = {
-        'total_horas_sobre_umbral': total_picos,
-        'pct_sobre_umbral':         _round2((total_picos / total_horas) * 100),
-        'pico_maximo_kwh':          _round4(pico_maximo.consumption_kwh),
-        'pico_maximo_fecha':        str(pico_maximo.timestamp),
-        'pico_maximo_mes':          pico_maximo.month_name,
-        'mes_mas_picos':            mes_mas_picos,
-        'picos_en_mes_mas':         picos_por_mes[mes_mas_picos],
-        'franja_mas_repetida':      franja_mas_repetida,
-        'hora_mas_repetida':        f"{hora_mas_repetida:02d}:00",
-    }
-
-    print(f"  Pico maximo: {kpis['pico_maximo_kwh']} kW ({kpis['pico_maximo_fecha']})")
-    print(f"  Mes con mas picos: {mes_mas_picos} ({kpis['picos_en_mes_mas']} horas)")
-    print(f"  Franja mas repetida: {franja_mas_repetida}")
+    print(f"  Horas sobre umbral: {total_peaks}")
+    print(f"  Porcentaje:         {pct_peaks}%")
 
     # ----------------------------------------------------------------
-    # TOP 10 PICOS MAS ALTOS (tabla interactiva)
+    # TOP 10 PICOS
     # ----------------------------------------------------------------
 
-    top10 = sorted(picos, key=lambda r: r.consumption_kwh, reverse=True)[:10]
-    top10_data = [
+    top10 = sorted(
+        peaks,
+        key=lambda r: r.consumption_kwh,
+        reverse=True
+    )[:10]
+
+    top10_list = [
         {
-            'ranking':          i + 1,
-            'fecha':            r.timestamp.strftime('%d/%m/%Y'),
-            'hora':             f"{r.timestamp.hour:02d}:00",
-            'dia_semana':       r.day_of_week.capitalize(),
-            'mes':              r.month_name.capitalize(),
-            'kwh':              _round4(r.consumption_kwh),
-            'exceso_kwh':       _round4(r.consumption_kwh - umbral_kw),
-            'es_festivo':       'Si' if r.is_holiday else 'No',
-            'es_finde':         'Si' if r.is_weekend else 'No',
-            'periodo_potencia': r.power_period.value,
-            'periodo_energia':  r.energy_period.value,
-            'franja':           _franja_horaria(r.timestamp.hour),
+            "timestamp": str(r.timestamp),
+            "fecha": str(r.timestamp.date()),
+            "hora": r.hour,
+            "month_name": r.month_name,
+            "day_of_week": r.day_of_week,
+            "consumption_kwh": _round2(r.consumption_kwh),
+            "exceso_kwh": _round2(r.consumption_kwh - umbral_kw),
+            "power_period": r.power_period.value,
+            "energy_period": r.energy_period.value,
+            "is_weekend": r.is_weekend,
+            "is_holiday": r.is_holiday,
         }
-        for i, r in enumerate(top10)
+        for r in top10
     ]
 
     # ----------------------------------------------------------------
-    # EVOLUCION MENSUAL DE PICOS
+    # POR MES
     # ----------------------------------------------------------------
 
+    by_month_sum = defaultdict(float)
     by_month_count = defaultdict(int)
-    by_month_max   = defaultdict(float)
-    by_month_sum   = defaultdict(float)
+    by_month_max = defaultdict(float)
+    month_num_map = {}
 
-    for r in picos:
-        by_month_count[r.month_name] += 1
-        by_month_sum[r.month_name]   += r.consumption_kwh
-        if r.consumption_kwh > by_month_max[r.month_name]:
-            by_month_max[r.month_name] = r.consumption_kwh
+    for r in peaks:
+        mes = r.month_name
+        by_month_sum[mes] += r.consumption_kwh
+        by_month_count[mes] += 1
+        by_month_max[mes] = max(by_month_max[mes], r.consumption_kwh)
+        month_num_map[mes] = r.month
 
     by_month = {
         mes: {
-            'num_picos':  by_month_count[mes],
-            'max_kwh':    _round4(by_month_max[mes]),
-            'avg_kwh':    _round4(by_month_sum[mes] / by_month_count[mes]),
-            'month_num':  MESES_ORDEN.index(mes) + 1 if mes in MESES_ORDEN else 99
+            "num_picos": by_month_count[mes],
+            "total_kwh": _round2(by_month_sum[mes]),
+            "avg_kwh": _round2(by_month_sum[mes] / by_month_count[mes]) if by_month_count[mes] > 0 else 0.0,
+            "max_kw": _round2(by_month_max[mes]),
+            "month_num": month_num_map[mes],
         }
         for mes in by_month_count
     }
-    by_month = dict(sorted(by_month.items(), key=lambda x: x[1]['month_num']))
+    by_month = dict(sorted(by_month.items(), key=lambda x: x[1]["month_num"]))
 
     # ----------------------------------------------------------------
-    # DISTRIBUCION POR FRANJA HORARIA
+    # POR FRANJA
     # ----------------------------------------------------------------
 
-    franjas_orden = [
-        'Madrugada (0h-6h)',
-        'Manana (6h-12h)',
-        'Tarde (12h-18h)',
-        'Noche (18h-24h)'
-    ]
+    by_franja_sum = defaultdict(float)
+    by_franja_count = defaultdict(int)
+
+    for r in peaks:
+        franja = _get_franja(r.hour)
+        by_franja_sum[franja] += r.consumption_kwh
+        by_franja_count[franja] += 1
+
+    franja_order = ["00-08", "08-12", "12-16", "16-20", "20-24"]
 
     by_franja = {
         franja: {
-            'num_picos':  picos_por_franja.get(franja, 0),
-            'pct':        _round2((picos_por_franja.get(franja, 0) / total_picos) * 100)
+            "num_picos": by_franja_count[franja],
+            "total_kwh": _round2(by_franja_sum[franja]),
+            "avg_kwh": _round2(by_franja_sum[franja] / by_franja_count[franja]) if by_franja_count[franja] > 0 else 0.0,
         }
-        for franja in franjas_orden
-    }
-
-    # Distribucion por hora exacta (0-23)
-    by_hora_exacta = {
-        hora: {
-            'num_picos': picos_por_hora.get(hora, 0),
-            'pct':       _round2((picos_por_hora.get(hora, 0) / total_picos) * 100)
-        }
-        for hora in range(24)
+        for franja in franja_order
+        if franja in by_franja_count
     }
 
     # ----------------------------------------------------------------
-    # MAPA DE CALOR: MES x HORA
+    # POR HORA
     # ----------------------------------------------------------------
 
+    by_hour_sum = defaultdict(float)
+    by_hour_count = defaultdict(int)
+
+    for r in peaks:
+        by_hour_sum[r.hour] += r.consumption_kwh
+        by_hour_count[r.hour] += 1
+
+    by_hour = {
+        hour: {
+            "num_picos": by_hour_count[hour],
+            "total_kwh": _round2(by_hour_sum[hour]),
+            "avg_kwh": _round2(by_hour_sum[hour] / by_hour_count[hour]) if by_hour_count[hour] > 0 else 0.0,
+        }
+        for hour in sorted(by_hour_count.keys())
+    }
+
+    # ----------------------------------------------------------------
+    # HEATMAP MES x HORA
+    # ----------------------------------------------------------------
+
+    heatmap_sum = defaultdict(float)
     heatmap_count = defaultdict(int)
-    for r in picos:
-        clave = (r.month_name, r.timestamp.hour)
+
+    for r in peaks:
+        mes = _get_month_short(r.month_name)
+        clave = (mes, r.hour)
+        heatmap_sum[clave] += r.consumption_kwh
         heatmap_count[clave] += 1
 
-    meses_presentes = sorted(
-        {r.month_name for r in picos},
-        key=lambda m: MESES_ORDEN.index(m) if m in MESES_ORDEN else 99
-    )
+    meses_presentes = []
+    for r in peaks:
+        mes = _get_month_short(r.month_name)
+        if mes not in meses_presentes:
+            meses_presentes.append(mes)
+
+    # Mantener orden cronológico por número de mes
+    month_order_map = {}
+    for r in peaks:
+        month_order_map[_get_month_short(r.month_name)] = r.month
+    meses_presentes = sorted(meses_presentes, key=lambda m: month_order_map.get(m, 99))
 
     heatmap = {
-        'meses': meses_presentes,
-        'horas': list(range(24)),
-        'valores': {}
+        "meses": meses_presentes,
+        "horas": list(range(24)),
+        "valores": {}
     }
+
     for mes in meses_presentes:
-        heatmap['valores'][mes] = {}
+        heatmap["valores"][mes] = {}
         for hora in range(24):
-            heatmap['valores'][mes][hora] = heatmap_count.get((mes, hora), 0)
+            clave = (mes, hora)
+            if clave in heatmap_sum:
+                heatmap["valores"][mes][hora] = _round2(heatmap_sum[clave] / heatmap_count[clave])
+            else:
+                heatmap["valores"][mes][hora] = None
 
     # ----------------------------------------------------------------
-    # LABORABLE VS FIN DE SEMANA
+    # POR TIPO DE DIA
     # ----------------------------------------------------------------
 
-    lab   = [r for r in picos if not r.is_weekend and not r.is_holiday]
-    finde = [r for r in picos if r.is_weekend or r.is_holiday]
+    laborable = [r for r in peaks if not r.is_weekend and not r.is_holiday]
+    fin_semana = [r for r in peaks if r.is_weekend or r.is_holiday]
 
     by_day_type = {
-        'laborable': {
-            'num_picos': len(lab),
-            'pct':       _round2((len(lab) / total_picos) * 100),
-            'max_kwh':   _round4(max(r.consumption_kwh for r in lab)) if lab else 0.0,
+        "laborable": {
+            "num_picos": len(laborable),
+            "total_kwh": _round2(sum(r.consumption_kwh for r in laborable)),
+            "avg_kwh": _round2(sum(r.consumption_kwh for r in laborable) / len(laborable)) if laborable else 0.0,
+            "pct_of_total": _round2((len(laborable) / total_peaks) * 100) if total_peaks > 0 else 0.0,
         },
-        'fin_de_semana': {
-            'num_picos': len(finde),
-            'pct':       _round2((len(finde) / total_picos) * 100),
-            'max_kwh':   _round4(max(r.consumption_kwh for r in finde)) if finde else 0.0,
+        "fin_de_semana": {
+            "num_picos": len(fin_semana),
+            "total_kwh": _round2(sum(r.consumption_kwh for r in fin_semana)),
+            "avg_kwh": _round2(sum(r.consumption_kwh for r in fin_semana) / len(fin_semana)) if fin_semana else 0.0,
+            "pct_of_total": _round2((len(fin_semana) / total_peaks) * 100) if total_peaks > 0 else 0.0,
         }
     }
 
     # ----------------------------------------------------------------
-    # POR PERIODO DE POTENCIA P1/P2
+    # POR PERIODO DE POTENCIA
     # ----------------------------------------------------------------
 
-    from src.models.internal_data_model import PowerPeriod
+    period_order = _get_period_order(contract_type)
 
-    p1_picos = [r for r in picos if r.power_period == PowerPeriod.P1]
-    p2_picos = [r for r in picos if r.power_period == PowerPeriod.P2]
+    by_period_sum = defaultdict(float)
+    by_period_count = defaultdict(int)
+
+    for r in peaks:
+        p = r.power_period.value
+        by_period_sum[p] += r.consumption_kwh
+        by_period_count[p] += 1
 
     by_period = {
-        'P1': {
-            'num_picos': len(p1_picos),
-            'pct':       _round2((len(p1_picos) / total_picos) * 100),
-            'max_kwh':   _round4(max(r.consumption_kwh for r in p1_picos)) if p1_picos else 0.0,
-        },
-        'P2': {
-            'num_picos': len(p2_picos),
-            'pct':       _round2((len(p2_picos) / total_picos) * 100),
-            'max_kwh':   _round4(max(r.consumption_kwh for r in p2_picos)) if p2_picos else 0.0,
+        p: {
+            "num_picos": by_period_count[p],
+            "total_kwh": _round2(by_period_sum[p]),
+            "avg_kwh": _round2(by_period_sum[p] / by_period_count[p]) if by_period_count[p] > 0 else 0.0,
+            "pct_of_total": _round2((by_period_count[p] / total_peaks) * 100) if total_peaks > 0 else 0.0,
         }
+        for p in period_order
     }
 
-    print(f"  P1: {by_period['P1']['num_picos']} picos | P2: {by_period['P2']['num_picos']} picos")
-    print(f"  Laborable: {by_day_type['laborable']['num_picos']} | Finde: {by_day_type['fin_de_semana']['num_picos']}")
-    print("Analisis de picos completado.")
+    print("  Picos por periodo:")
+    for p in period_order:
+        print(f"    {p}: {by_period[p]['num_picos']} horas ({by_period[p]['pct_of_total']}%)")
 
-    return {
-        'umbral_kw':    umbral_kw,
-        'total_picos':  total_picos,
-        'kpis':         kpis,
-        'top10':        top10_data,
-        'by_month':     by_month,
-        'by_franja':    by_franja,
-        'by_hora':      by_hora_exacta,
-        'heatmap':      heatmap,
-        'by_day_type':  by_day_type,
-        'by_period':    by_period,
+    # ----------------------------------------------------------------
+    # GUARDAR EN analysis
+    # ----------------------------------------------------------------
+
+    peaks_analysis = {
+        "umbral_kw": umbral_kw,
+        "total_peaks": total_peaks,
+        "pct_peaks": pct_peaks,
+        "top10": top10_list,
+        "by_month": by_month,
+        "by_franja": by_franja,
+        "by_hour": by_hour,
+        "heatmap": heatmap,
+        "by_day_type": by_day_type,
+        "by_period": by_period,
+        "contract_type": contract_type.value,
     }
+
+    analysis.peaks_analysis = peaks_analysis
+
+    print("Análisis de picos completado.")
+    return analysis

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime
 from typing import List, Optional, Tuple
 
@@ -17,7 +18,6 @@ from src.models.internal_data_model import (
     ElectricityAnalysis,
     ClientProfile,
     ContractInfo,
-    ContractedPowers,
     HourlyRecord,
     MonthlyMaxPower,
     DataSource,
@@ -39,10 +39,6 @@ SPAIN_HOLIDAYS_CACHE = {}
 # =============================================================================
 
 def get_spain_holidays(province: Optional[str] = None, years: Optional[List[int]] = None):
-    """
-    Devuelve festivos de España.
-    De momento usamos festivos nacionales/autonómicos que maneja holidays.
-    """
     key = (province, tuple(sorted(years)) if years else None)
     if key not in SPAIN_HOLIDAYS_CACHE:
         if years:
@@ -53,11 +49,6 @@ def get_spain_holidays(province: Optional[str] = None, years: Optional[List[int]
 
 
 def safe_float(value, default: float = 0.0) -> float:
-    """
-    Convierte valores tipo:
-    - "10,123" -> 10.123
-    - "" / NaN  -> default
-    """
     if pd.isna(value):
         return default
 
@@ -65,9 +56,7 @@ def safe_float(value, default: float = 0.0) -> float:
     if text == "":
         return default
 
-    text = text.replace(".", "").replace(",", ".") if text.count(",") == 1 and text.count(".") > 1 else text
     text = text.replace(",", ".")
-
     try:
         return float(text)
     except Exception:
@@ -84,10 +73,6 @@ def safe_int(value, default: int = 0) -> int:
 
 
 def normalize_hour_2_0(hour_raw: int) -> int:
-    """
-    2.0TD habitual: 1-24 donde 1 = 00:00-00:59
-    Convertimos a 0-23 para el modelo interno.
-    """
     if hour_raw <= 0:
         return 0
     if hour_raw == 24:
@@ -96,10 +81,6 @@ def normalize_hour_2_0(hour_raw: int) -> int:
 
 
 def normalize_hour_3_0(hour_raw: int) -> int:
-    """
-    3.0TD habitual: 0-23
-    Si aparece 24, por regla del proyecto se trata como 23.
-    """
     if hour_raw < 0:
         return 0
     if hour_raw >= 24:
@@ -117,34 +98,72 @@ def month_name_es(month: int) -> str:
 
 
 def detect_csv_type(filepath: str) -> str:
-    """
-    Detecta el tipo de CSV real por columnas.
-    Devuelve uno de:
-    - consumption_2_0
-    - power_2_0
-    - consumption_3_0
-    - power_3_0
-    """
     df = pd.read_csv(filepath, sep=";", nrows=5, dtype=str, encoding="utf-8", on_bad_lines="skip")
     cols = [c.strip() for c in df.columns]
 
-    # Consumo 3.0TD
     if "AE_kWh" in cols:
         return "consumption_3_0"
 
-    # Potencia 3.0TD
     if "Periode" in cols and "Mes/Any" in cols and "kW" in cols:
         return "power_3_0"
 
-    # Consumo 2.0TD
     if {"CUPS", "Fecha", "Hora", "Consumo"}.issubset(set(cols)):
         return "consumption_2_0"
 
-    # Potencia 2.0TD
     if "Periodo" in cols and "Mes/Ano" in cols and "kW" in cols:
         return "power_2_0"
 
     raise ValueError(f"No se pudo detectar el tipo de CSV en: {os.path.basename(filepath)}")
+
+
+def parse_date_flexible(date_str: str) -> Optional[datetime]:
+    text = str(date_str).strip()
+    if not text or text.lower() == "nan":
+        return None
+
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d/%m/%y", "%d-%m-%y"):
+        try:
+            return datetime.strptime(text, fmt)
+        except Exception:
+            pass
+    return None
+
+
+def extract_month_year(text: str) -> Tuple[Optional[int], Optional[int]]:
+    """
+    Intenta sacar mes y año desde cadenas tipo:
+    - 02/2024
+    - 02-2024
+    - 2/2024
+    - 2-2024
+    - 2024-02
+    - 2024/02
+    """
+    raw = str(text).strip()
+    if not raw or raw.lower() == "nan":
+        return None, None
+
+    nums = re.findall(r"\d+", raw)
+    if len(nums) < 2:
+        return None, None
+
+    a, b = nums[0], nums[1]
+
+    # Caso mes-año
+    if len(b) == 4:
+        month_num = int(a)
+        year = int(b)
+        if 1 <= month_num <= 12:
+            return month_num, year
+
+    # Caso año-mes
+    if len(a) == 4:
+        year = int(a)
+        month_num = int(b)
+        if 1 <= month_num <= 12:
+            return month_num, year
+
+    return None, None
 
 
 # =============================================================================
@@ -152,13 +171,7 @@ def detect_csv_type(filepath: str) -> str:
 # =============================================================================
 
 def get_energy_period_2_0(dt: datetime, is_holiday: bool) -> EnergyPeriod:
-    """
-    2.0TD:
-    - P1 = lun-vie 10-14 y 18-22
-    - P2 = lun-vie resto horas laborables
-    - P3 = noches + fines de semana + festivos
-    """
-    wd = dt.weekday()  # 0=lunes ... 6=domingo
+    wd = dt.weekday()
     h = dt.hour
 
     if is_holiday or wd >= 5:
@@ -171,11 +184,6 @@ def get_energy_period_2_0(dt: datetime, is_holiday: bool) -> EnergyPeriod:
 
 
 def get_power_period_2_0(dt: datetime, is_holiday: bool) -> PowerPeriod:
-    """
-    2.0TD:
-    - P1 = lun-vie 8-24
-    - P2 = resto
-    """
     wd = dt.weekday()
     h = dt.hour
 
@@ -193,13 +201,6 @@ def get_power_period_2_0(dt: datetime, is_holiday: bool) -> PowerPeriod:
 # =============================================================================
 
 def get_3_0_season(month: int) -> str:
-    """
-    Según la imagen/regla fijada en el proyecto:
-    - ALTA: enero, febrero, julio, diciembre
-    - MED_ALTA: marzo, noviembre
-    - MEDIA: junio, agosto, septiembre
-    - BAJA: abril, mayo, octubre
-    """
     if month in (1, 2, 7, 12):
         return "ALTA"
     if month in (3, 11):
@@ -210,41 +211,17 @@ def get_3_0_season(month: int) -> str:
 
 
 def get_energy_period_3_0(dt: datetime, is_holiday: bool) -> EnergyPeriod:
-    """
-    Lógica 3.0TD acordada:
-    - Sábados, domingos y festivos nacionales: P6 las 24h
-    - Lunes a viernes:
-        ALTA:
-            P1: 9-14 y 18-22
-            P2: 8-9, 14-18, 22-24
-            P6: 0-8
-        MED_ALTA:
-            P2: 9-14 y 18-22
-            P3: 8-9, 14-18, 22-24
-            P6: 0-8
-        MEDIA:
-            P3: 9-14 y 18-22
-            P4: 8-9, 14-18, 22-24
-            P6: 0-8
-        BAJA:
-            P4: 9-14 y 18-22
-            P5: 8-9, 14-18, 22-24
-            P6: 0-8
-    """
     wd = dt.weekday()
     h = dt.hour
 
-    # Sábado, domingo o festivo => P6
     if is_holiday or wd >= 5:
         return EnergyPeriod.P6
 
     season = get_3_0_season(dt.month)
 
-    # 00-07
     if 0 <= h < 8:
         return EnergyPeriod.P6
 
-    # 08
     if h == 8:
         if season == "ALTA":
             return EnergyPeriod.P2
@@ -254,7 +231,6 @@ def get_energy_period_3_0(dt: datetime, is_holiday: bool) -> EnergyPeriod:
             return EnergyPeriod.P4
         return EnergyPeriod.P5
 
-    # 09-13
     if 9 <= h < 14:
         if season == "ALTA":
             return EnergyPeriod.P1
@@ -264,7 +240,6 @@ def get_energy_period_3_0(dt: datetime, is_holiday: bool) -> EnergyPeriod:
             return EnergyPeriod.P3
         return EnergyPeriod.P4
 
-    # 14-17
     if 14 <= h < 18:
         if season == "ALTA":
             return EnergyPeriod.P2
@@ -274,7 +249,6 @@ def get_energy_period_3_0(dt: datetime, is_holiday: bool) -> EnergyPeriod:
             return EnergyPeriod.P4
         return EnergyPeriod.P5
 
-    # 18-21
     if 18 <= h < 22:
         if season == "ALTA":
             return EnergyPeriod.P1
@@ -284,7 +258,6 @@ def get_energy_period_3_0(dt: datetime, is_holiday: bool) -> EnergyPeriod:
             return EnergyPeriod.P3
         return EnergyPeriod.P4
 
-    # 22-23
     if 22 <= h < 24:
         if season == "ALTA":
             return EnergyPeriod.P2
@@ -298,11 +271,6 @@ def get_energy_period_3_0(dt: datetime, is_holiday: bool) -> EnergyPeriod:
 
 
 def get_power_period_3_0(dt: datetime, is_holiday: bool) -> PowerPeriod:
-    """
-    Para registros horarios derivados del CSV de consumo 3.0TD,
-    alineamos potencia al mismo periodo horario que energía.
-    El CSV oficial de potencia mensual ya trae P1..P6 y se usa tal cual.
-    """
     ep = get_energy_period_3_0(dt, is_holiday)
     return PowerPeriod(ep.value)
 
@@ -436,19 +404,24 @@ def load_consumption_csv_3_0(filepath: str, client: ClientProfile) -> List[Hourl
 
 def parse_period_2_0(period_text: str) -> str:
     text = str(period_text).strip()
-    if text.lower() in ("punta", "p1"):
+    low = text.lower()
+
+    if low in ("punta", "p1"):
         return "Punta"
-    if text.lower() in ("valle", "p2"):
+    if low in ("valle", "p2"):
         return "Valle"
-    if text.lower() in ("pot.max", "pot max", "potmax"):
+    if low in ("pot.max", "pot max", "potmax"):
         return "Pot.Max"
+
     return text
 
 
 def parse_period_3_0(period_text: str) -> str:
     text = str(period_text).strip().upper()
-    if text in {"P1", "P2", "P3", "P4", "P5", "P6", "POT.MAX", "POT MAX", "POTMAX"}:
-        return "Pot.Max" if "POT" in text else text
+    if text in {"P1", "P2", "P3", "P4", "P5", "P6"}:
+        return text
+    if text in {"POT.MAX", "POT MAX", "POTMAX"}:
+        return "Pot.Max"
     return text
 
 
@@ -465,22 +438,27 @@ def load_power_csv_2_0(filepath: str) -> List[MonthlyMaxPower]:
 
     for _, row in df.iterrows():
         try:
-            month_year = str(row["Mes/Ano"]).strip()
-            month_num, year = month_year.split("/")
-            month_num = int(month_num)
-            year = int(year)
+            month_num, year = extract_month_year(row.get("Mes/Ano", ""))
+
+            date_str = str(row.get("Fecha", "")).strip()
+            dt_date = parse_date_flexible(date_str)
+
+            if month_num is None or year is None:
+                if dt_date is not None:
+                    month_num = dt_date.month
+                    year = dt_date.year
+                else:
+                    raise ValueError(f"No se pudo interpretar Mes/Ano='{row.get('Mes/Ano', '')}'")
 
             period = parse_period_2_0(row["Periodo"])
             max_kw = safe_float(row["kW"])
 
-            date_str = str(row["Fecha"]).strip()
-            hour_raw = safe_int(row["Hora"], default=0)
+            hour_raw = safe_int(row.get("Hora", 0), default=0)
             hour = normalize_hour_2_0(hour_raw)
 
-            try:
-                dt = datetime.strptime(date_str, "%d/%m/%Y")
-                dt = datetime(dt.year, dt.month, dt.day, hour, 0)
-            except Exception:
+            if dt_date is not None:
+                dt = datetime(dt_date.year, dt_date.month, dt_date.day, hour, 0)
+            else:
                 dt = datetime(year, month_num, 1, hour, 0)
 
             records.append(
@@ -512,22 +490,27 @@ def load_power_csv_3_0(filepath: str) -> List[MonthlyMaxPower]:
 
     for _, row in df.iterrows():
         try:
-            month_year = str(row["Mes/Any"]).strip()
-            month_num, year = month_year.split("-")
-            month_num = int(month_num)
-            year = int(year)
+            month_num, year = extract_month_year(row.get("Mes/Any", ""))
+
+            date_str = str(row.get("Data", "")).strip()
+            dt_date = parse_date_flexible(date_str)
+
+            if month_num is None or year is None:
+                if dt_date is not None:
+                    month_num = dt_date.month
+                    year = dt_date.year
+                else:
+                    raise ValueError(f"No se pudo interpretar Mes/Any='{row.get('Mes/Any', '')}'")
 
             period = parse_period_3_0(row["Periode"])
             max_kw = safe_float(row["kW"])
 
-            date_str = str(row.get("Data", "")).strip()
             hour_raw = safe_int(row.get("Hora", 0), default=0)
             hour = normalize_hour_3_0(hour_raw)
 
-            try:
-                dt = datetime.strptime(date_str, "%d/%m/%Y")
-                dt = datetime(dt.year, dt.month, dt.day, hour, 0)
-            except Exception:
+            if dt_date is not None:
+                dt = datetime(dt_date.year, dt_date.month, dt_date.day, hour, 0)
+            else:
                 dt = datetime(year, month_num, 1, hour, 0)
 
             records.append(
@@ -572,7 +555,6 @@ def load_from_csv(filepaths: List[str], client: ClientProfile, contract: Optiona
         elif csv_type == "power_3_0":
             monthly_max_power.extend(load_power_csv_3_0(filepath))
 
-    # Si no se indicó contrato, lo intentamos inferir
     inferred_contract = client.contract_type
     if inferred_contract is None:
         if any(t[1].endswith("3_0") for t in detected_types):

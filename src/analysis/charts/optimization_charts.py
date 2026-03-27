@@ -1,7 +1,12 @@
 # =============================================================================
 # src/analysis/charts/optimization_charts.py
-# Gráficos de optimización de potencia contratada
+# Graficos de optimizacion de potencia contratada
 # Compatible con 2.0TD + 3.0TD
+# Estructura original:
+# 1. KPIs
+# 2. Picos
+# 3. Excesos
+# 4. Opciones
 # =============================================================================
 
 import pandas as pd
@@ -17,9 +22,9 @@ COLOR_RED = "#CC1F1F"
 COLOR_ORANGE = "#F5A623"
 COLOR_BLUE = "#2563EB"
 COLOR_GREEN = "#16A34A"
-COLOR_GRAY = "#6B7280"
-COLOR_LIGHT = "#F3F4F6"
+COLOR_LIGHT = "#F9FAFB"
 COLOR_DARK = "#111827"
+COLOR_GRAY = "#6B7280"
 
 
 # =============================================================================
@@ -30,18 +35,51 @@ def _is_3_0(opt_result: dict) -> bool:
     return opt_result.get("contract_type") == "3.0TD"
 
 
-def _alias_periodo_2(opt_result: dict) -> str:
+def _periodos(opt_result: dict):
+    if _is_3_0(opt_result):
+        return ["P1", "P2", "P3", "P4", "P5", "P6"]
+    return ["P1", opt_result.get("alias_periodo_2", "P3")]
+
+
+def _alias2(opt_result: dict) -> str:
     return opt_result.get("alias_periodo_2", "P3")
 
 
-def _ordered_periods(opt_result: dict):
-    if _is_3_0(opt_result):
-        return ["P1", "P2", "P3", "P4", "P5", "P6"]
-    return ["P1", _alias_periodo_2(opt_result)]
+def _card_annotation(x0, x1, title, value, subtitle="", color=COLOR_BLUE):
+    ann = [
+        dict(
+            x=(x0 + x1) / 2,
+            y=0.72,
+            xref="paper",
+            yref="paper",
+            text=f"<b>{title}</b>",
+            showarrow=False,
+            font=dict(size=14, color=COLOR_DARK),
+        ),
+        dict(
+            x=(x0 + x1) / 2,
+            y=0.48,
+            xref="paper",
+            yref="paper",
+            text=f"<span style='font-size:28px; color:{color}'><b>{value}</b></span>",
+            showarrow=False,
+        ),
+    ]
 
+    if subtitle:
+        ann.append(
+            dict(
+                x=(x0 + x1) / 2,
+                y=0.25,
+                xref="paper",
+                yref="paper",
+                text=subtitle,
+                showarrow=False,
+                font=dict(size=12, color=COLOR_GRAY),
+            )
+        )
 
-def _round2(x):
-    return round(float(x), 2)
+    return ann
 
 
 # =============================================================================
@@ -50,96 +88,128 @@ def _round2(x):
 
 def chart_optimization_kpis(opt_result: dict):
     kpis = opt_result["kpis"]
-    periodos = _ordered_periods(opt_result)
+    alias2 = _alias2(opt_result)
+    es_3 = _is_3_0(opt_result)
 
     contracted = kpis.get("contracted_periods", {})
-    maximos = kpis.get("max_picos_por_periodo", {})
     meses_exceso = kpis.get("meses_exceso_por_periodo", {})
+    maximos = kpis.get("max_picos_por_periodo", {})
 
-    labels = []
-    values_current = []
-    values_max = []
+    fig = go.Figure()
 
-    for p in periodos:
-        labels.append(p)
-        values_current.append(contracted.get(p, 0.0))
-        values_max.append(maximos.get(p, 0.0))
+    # Tarjetas fondo
+    boxes = [
+        (0.00, 0.23),
+        (0.26, 0.49),
+        (0.52, 0.75),
+        (0.78, 1.00),
+    ]
 
-    fig = make_subplots(
-        rows=1,
-        cols=2,
-        subplot_titles=("Potencia contratada vs pico máximo", "Meses con exceso por periodo"),
-        specs=[[{"type": "bar"}, {"type": "bar"}]]
-    )
+    for x0, x1 in boxes:
+        fig.add_shape(
+            type="rect",
+            xref="paper",
+            yref="paper",
+            x0=x0,
+            x1=x1,
+            y0=0.02,
+            y1=0.98,
+            line=dict(color="#E5E7EB", width=1),
+            fillcolor="white",
+        )
 
-    fig.add_trace(
-        go.Bar(
-            x=labels,
-            y=values_current,
-            name="Contratada",
-            marker_color=COLOR_BLUE,
-        ),
-        row=1, col=1
-    )
+    annotations = []
 
-    fig.add_trace(
-        go.Bar(
-            x=labels,
-            y=values_max,
-            name="Pico máximo",
-            marker_color=COLOR_RED,
-        ),
-        row=1, col=1
-    )
+    if es_3:
+        pot_txt = " / ".join([f"{p}: {contracted.get(p, 0)}" for p in _periodos(opt_result)])
+        exc_txt = " / ".join([f"{p}: {meses_exceso.get(p, 0)}" for p in _periodos(opt_result)])
+        max_txt = " / ".join([f"{p}: {maximos.get(p, 0)}" for p in _periodos(opt_result)])
 
-    fig.add_trace(
-        go.Bar(
-            x=labels,
-            y=[meses_exceso.get(p, 0) for p in labels],
-            name="Meses con exceso",
-            marker_color=COLOR_ORANGE,
-        ),
-        row=1, col=2
-    )
+        estado = "Hay periodos a revisar" if kpis.get("tiene_exceso") else "Potencia bien ajustada"
+        estado_color = COLOR_RED if kpis.get("tiene_exceso") else COLOR_GREEN
+
+        annotations += _card_annotation(*boxes[0], "Potencias actuales", pot_txt, "", COLOR_BLUE)
+        annotations += _card_annotation(*boxes[1], "Meses con exceso", exc_txt, "", COLOR_ORANGE)
+        annotations += _card_annotation(*boxes[2], "Picos máximos", max_txt, "", COLOR_RED)
+        annotations += _card_annotation(*boxes[3], "Estado", estado, "", estado_color)
+
+    else:
+        estado = "Hay excesos registrados" if kpis.get("tiene_exceso") else "Potencia bien ajustada"
+        estado_color = COLOR_RED if kpis.get("tiene_exceso") else COLOR_GREEN
+
+        annotations += _card_annotation(
+            *boxes[0],
+            "Potencias actuales",
+            f"P1: {kpis['contracted_p1']} / {alias2}: {kpis['contracted_p2']}",
+            "",
+            COLOR_BLUE
+        )
+        annotations += _card_annotation(
+            *boxes[1],
+            "Meses con exceso",
+            f"P1: {kpis['meses_exceso_p1']} / {alias2}: {kpis['meses_exceso_p2']}",
+            "",
+            COLOR_ORANGE
+        )
+        annotations += _card_annotation(
+            *boxes[2],
+            "Pico máximo",
+            f"P1: {kpis['max_pico_punta']} / {alias2}: {kpis['max_pico_valle']}",
+            "",
+            COLOR_RED
+        )
+        annotations += _card_annotation(
+            *boxes[3],
+            "Estado",
+            estado,
+            "",
+            estado_color
+        )
 
     fig.update_layout(
-        title="KPIs de optimización de potencia",
-        barmode="group",
+        title="KPIs de optimización",
         template="plotly_white",
-        height=450,
-        legend_title_text=""
+        height=260,
+        margin=dict(l=20, r=20, t=60, b=20),
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        annotations=annotations,
     )
-
-    fig.update_yaxes(title_text="kW", row=1, col=1)
-    fig.update_yaxes(title_text="Nº meses", row=1, col=2)
 
     return fig
 
 
 # =============================================================================
-# 2. BARRAS MENSUALES
+# 2. PICOS
 # =============================================================================
 
-def chart_monthly_official_peaks(opt_result: dict):
+def chart_optimization_peaks(opt_result: dict):
     picos = opt_result["picos_mensuales"]
-    periodos = _ordered_periods(opt_result)
+    periodos = _periodos(opt_result)
     contracted = opt_result["contracted_periods"]
 
     meses = [p["mes"].capitalize() for p in picos]
 
     fig = go.Figure()
 
-    # Barras por periodo
+    # Barras mensuales por periodo
     for p in periodos:
+        y = [row["periodos"].get(p, {}).get("pico_kw", 0.0) for row in picos]
+        colors = []
+        for row in picos:
+            supera = row["periodos"].get(p, {}).get("supera", False)
+            colors.append(COLOR_RED if supera else COLOR_BLUE)
+
         fig.add_trace(
             go.Bar(
                 x=meses,
-                y=[pico["periodos"].get(p, {}).get("pico_kw", 0.0) for pico in picos],
+                y=y,
                 name=f"Pico {p}",
+                marker_color=colors,
             )
         )
 
-    # Líneas contratadas
+    # Líneas de potencia contratada
     for p in periodos:
         fig.add_trace(
             go.Scatter(
@@ -147,70 +217,94 @@ def chart_monthly_official_peaks(opt_result: dict):
                 y=[contracted.get(p, 0.0)] * len(meses),
                 mode="lines",
                 name=f"Contratada {p}",
-                line=dict(dash="dash")
+                line=dict(dash="dash"),
             )
         )
 
     fig.update_layout(
-        title="Picos oficiales mensuales por periodo",
-        barmode="group",
+        title="Picos mensuales vs potencia contratada",
         template="plotly_white",
+        barmode="group",
         height=520,
         xaxis_title="Mes",
         yaxis_title="kW",
-        legend_title_text=""
+        legend_title_text="",
     )
 
     return fig
 
 
 # =============================================================================
-# 3. TABLA DE EXCESOS
+# 3. EXCESOS
 # =============================================================================
 
-def chart_excess_table(opt_result: dict):
-    if _is_3_0(opt_result):
+def chart_optimization_excess(opt_result: dict):
+    es_3 = _is_3_0(opt_result)
+
+    if es_3:
         rows = opt_result.get("tabla_excesos_full", [])
         if not rows:
-            rows = [{
-                "mes": "—",
-                "periodo": "—",
-                "pico_kw": "—",
-                "contracted_kw": "—",
-                "exceso_kw": "—",
-            }]
+            fig = go.Figure()
+            fig.add_annotation(
+                text="<b>Sin excesos registrados</b>",
+                x=0.5, y=0.5,
+                xref="paper", yref="paper",
+                showarrow=False,
+                font=dict(size=20, color=COLOR_GREEN)
+            )
+            fig.update_layout(
+                title="Excesos registrados",
+                template="plotly_white",
+                height=300,
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+            )
+            return fig
 
         df = pd.DataFrame(rows)
-        cols = ["mes", "periodo", "pico_kw", "contracted_kw", "exceso_kw"]
-        headers = ["Mes", "Periodo", "Pico (kW)", "Contratada (kW)", "Exceso (kW)"]
+        df = df.rename(columns={
+            "mes": "Mes",
+            "periodo": "Periodo",
+            "pico_kw": "Pico (kW)",
+            "contracted_kw": "Contratada (kW)",
+            "exceso_kw": "Exceso (kW)",
+        })
 
     else:
         rows = opt_result.get("tabla_excesos", [])
         if not rows:
-            rows = [{
-                "mes": "—",
-                "pico_punta": "—",
-                "exceso_p1": "—",
-                "pico_valle": "—",
-                "exceso_p2": "—",
-            }]
+            fig = go.Figure()
+            fig.add_annotation(
+                text="<b>Sin excesos registrados</b>",
+                x=0.5, y=0.5,
+                xref="paper", yref="paper",
+                showarrow=False,
+                font=dict(size=20, color=COLOR_GREEN)
+            )
+            fig.update_layout(
+                title="Excesos registrados",
+                template="plotly_white",
+                height=300,
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+            )
+            return fig
 
-        alias2 = _alias_periodo_2(opt_result)
-        df = pd.DataFrame(rows)
-        cols = ["mes", "pico_punta", "exceso_p1", "pico_valle", "exceso_p2"]
-        headers = ["Mes", "Pico P1", "Exceso P1", f"Pico {alias2}", f"Exceso {alias2}"]
+        alias2 = _alias2(opt_result)
+        df = pd.DataFrame(rows)[["mes", "pico_punta", "exceso_p1", "pico_valle", "exceso_p2"]]
+        df.columns = ["Mes", "Pico P1", "Exceso P1", f"Pico {alias2}", f"Exceso {alias2}"]
 
     fig = go.Figure(
         data=[
             go.Table(
                 header=dict(
-                    values=headers,
+                    values=list(df.columns),
                     fill_color=COLOR_RED,
                     font=dict(color="white", size=12),
                     align="center"
                 ),
                 cells=dict(
-                    values=[df[c] for c in cols],
+                    values=[df[col] for col in df.columns],
                     fill_color="white",
                     align="center",
                     font=dict(size=11),
@@ -221,20 +315,20 @@ def chart_excess_table(opt_result: dict):
     )
 
     fig.update_layout(
-        title="Meses con excesos registrados",
-        height=max(350, 60 + len(df) * 28)
+        title="Excesos registrados",
+        height=max(320, 90 + len(df) * 28)
     )
 
     return fig
 
 
 # =============================================================================
-# 4. TARJETAS OPCIONES SUGERIDAS
+# 4. OPCIONES
 # =============================================================================
 
-def chart_suggested_options(opt_result: dict):
+def chart_optimization_options(opt_result: dict):
     opciones = opt_result["opciones_sugeridas"]
-    periodos = _ordered_periods(opt_result)
+    periodos = _periodos(opt_result)
 
     fig = make_subplots(
         rows=1,
@@ -243,10 +337,10 @@ def chart_suggested_options(opt_result: dict):
             opciones["equilibrada"]["titulo"],
             opciones["segura"]["titulo"],
         ),
-        specs=[[{"type": "table"}, {"type": "table"}]]
+        specs=[[{"type": "table"}, {"type": "table"}]],
     )
 
-    def build_table_data(op):
+    def build_df(op):
         rows = []
         for p in periodos:
             info = op["periodos"].get(p, {})
@@ -258,8 +352,8 @@ def chart_suggested_options(opt_result: dict):
             })
         return pd.DataFrame(rows)
 
-    df_eq = build_table_data(opciones["equilibrada"])
-    df_sg = build_table_data(opciones["segura"])
+    df_eq = build_df(opciones["equilibrada"])
+    df_sg = build_df(opciones["segura"])
 
     fig.add_trace(
         go.Table(
@@ -271,7 +365,7 @@ def chart_suggested_options(opt_result: dict):
             ),
             cells=dict(
                 values=[df_eq[c] for c in df_eq.columns],
-                fill_color="white",
+                fill_color="#FFF7ED",
                 align="center",
                 height=28
             )
@@ -289,7 +383,7 @@ def chart_suggested_options(opt_result: dict):
             ),
             cells=dict(
                 values=[df_sg[c] for c in df_sg.columns],
-                fill_color="white",
+                fill_color="#ECFDF5",
                 align="center",
                 height=28
             )
@@ -298,42 +392,8 @@ def chart_suggested_options(opt_result: dict):
     )
 
     fig.update_layout(
-        title="Opciones sugeridas de potencia contratada",
-        height=450
-    )
-
-    return fig
-
-
-# =============================================================================
-# 5. RESUMEN DE EXCESOS POR PERIODO
-# =============================================================================
-
-def chart_excess_summary(opt_result: dict):
-    kpis = opt_result["kpis"]
-    periodos = _ordered_periods(opt_result)
-    meses_exceso = kpis.get("meses_exceso_por_periodo", {})
-
-    fig = go.Figure()
-
-    fig.add_trace(
-        go.Bar(
-            x=periodos,
-            y=[meses_exceso.get(p, 0) for p in periodos],
-            marker_color=COLOR_RED,
-            text=[meses_exceso.get(p, 0) for p in periodos],
-            textposition="outside",
-            name="Meses con exceso"
-        )
-    )
-
-    fig.update_layout(
-        title="Resumen de meses con exceso por periodo",
-        template="plotly_white",
-        height=420,
-        xaxis_title="Periodo",
-        yaxis_title="Nº meses",
-        showlegend=False
+        title="Opciones sugeridas",
+        height=460
     )
 
     return fig
@@ -344,10 +404,21 @@ def chart_excess_summary(opt_result: dict):
 # =============================================================================
 
 def generate_optimization_charts(opt_result: dict):
-    return {
+    """
+    Devuelve exactamente 4 gráficos:
+    - kpis
+    - picos
+    - excesos
+    - opciones
+    """
+    print("Generando gráficos de optimización...")
+
+    charts = {
         "kpis": chart_optimization_kpis(opt_result),
-        "monthly_official": chart_monthly_official_peaks(opt_result),
-        "table_excess": chart_excess_table(opt_result),
-        "suggested_options": chart_suggested_options(opt_result),
-        "summary_excess": chart_excess_summary(opt_result),
+        "picos": chart_optimization_peaks(opt_result),
+        "excesos": chart_optimization_excess(opt_result),
+        "opciones": chart_optimization_options(opt_result),
     }
+
+    print("4 gráficos generados correctamente.")
+    return charts

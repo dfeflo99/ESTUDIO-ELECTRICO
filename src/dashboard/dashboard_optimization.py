@@ -156,41 +156,31 @@ def _initial_power_values(
 
 def _build_power_controls(analysis: ElectricityAnalysis, init_vals: dict):
     if _is_3_0(analysis):
-        return html.Div(
-            style={"display": "grid", "gridTemplateColumns": "repeat(3, 1fr)", "gap": "20px"},
-            children=[
-                html.Div([
-                    html.P("P1 (kW)", style=FILTER_LABEL_STYLE),
-                    dcc.Input(id="opt-p1-input", type="number", value=init_vals["P1"], step=0.1,
-                              style={"width": "100%", "padding": "10px"}),
-                ]),
-                html.Div([
-                    html.P("P2 (kW)", style=FILTER_LABEL_STYLE),
-                    dcc.Input(id="opt-p2-input", type="number", value=init_vals["P2"], step=0.1,
-                              style={"width": "100%", "padding": "10px"}),
-                ]),
-                html.Div([
-                    html.P("P3 (kW)", style=FILTER_LABEL_STYLE),
-                    dcc.Input(id="opt-p3-input", type="number", value=init_vals["P3"], step=0.1,
-                              style={"width": "100%", "padding": "10px"}),
-                ]),
-                html.Div([
-                    html.P("P4 (kW)", style=FILTER_LABEL_STYLE),
-                    dcc.Input(id="opt-p4-input", type="number", value=init_vals["P4"], step=0.1,
-                              style={"width": "100%", "padding": "10px"}),
-                ]),
-                html.Div([
-                    html.P("P5 (kW)", style=FILTER_LABEL_STYLE),
-                    dcc.Input(id="opt-p5-input", type="number", value=init_vals["P5"], step=0.1,
-                              style={"width": "100%", "padding": "10px"}),
-                ]),
-                html.Div([
-                    html.P("P6 (kW)", style=FILTER_LABEL_STYLE),
-                    dcc.Input(id="opt-p6-input", type="number", value=init_vals["P6"], step=0.1,
-                              style={"width": "100%", "padding": "10px"}),
-                ]),
-            ]
-        )
+            return html.Div(
+        style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "24px"},
+        children=[
+            html.Div([
+                html.P("P1 (kW) — Laborable diurno", style=FILTER_LABEL_STYLE),
+                dcc.Input(
+                    id="opt-p1-input",
+                    type="number",
+                    value=init_vals["P1"],
+                    step=0.1,
+                    style={"width": "100%", "padding": "10px"}
+                ),
+            ]),
+            html.Div([
+                html.P("P3 (kW) — Nocturno / Finde", style=FILTER_LABEL_STYLE),
+                dcc.Input(
+                    id="opt-p3-input",
+                    type="number",
+                    value=init_vals["P3"],
+                    step=0.1,
+                    style={"width": "100%", "padding": "10px"}
+                ),
+            ]),
+        ]
+    )
 
     opciones = _default_power_options()
     return html.Div(

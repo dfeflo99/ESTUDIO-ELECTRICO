@@ -1,399 +1,434 @@
 # =============================================================================
 # src/analysis/charts/peaks_charts.py
-# Graficos de analisis de picos criticos con Plotly
-# Version: 1.0
-#
-# Pagina 3 del informe: Analisis de picos criticos
+# Gráficos de análisis de picos
+# Compatible con 2.0TD + 3.0TD
 # =============================================================================
 
+import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-import sys
-sys.path.append('../..')
+
+# =============================================================================
+# CONFIG VISUAL
+# =============================================================================
+
+COLOR_RED = "#CC1F1F"
+COLOR_ORANGE = "#F59E0B"
+COLOR_BLUE = "#2563EB"
+COLOR_GREEN = "#16A34A"
+COLOR_GRAY = "#6B7280"
+COLOR_DARK = "#111827"
 
 
-COLORS = {
-    'primary':    '#2563EB',
-    'secondary':  '#3B82F6',
-    'light':      '#93C5FD',
-    'accent':     '#1D4ED8',
-    'danger':     '#EF4444',
-    'warning':    '#F59E0B',
-    'success':    '#10B981',
-    'background': '#F8FAFF',
-    'grid':       '#E2E8F0',
-    'text':       '#1E293B',
-    'text_light': '#64748B',
-    'p1':         '#1D4ED8',
-    'p2':         '#93C5FD',
-    'laborable':  '#2563EB',
-    'finde':      '#93C5FD',
-    'madrugada':  '#1E3A5F',
-    'manana':     '#3B82F6',
-    'tarde':      '#F59E0B',
-    'noche':      '#6366F1',
-}
+# =============================================================================
+# HELPERS
+# =============================================================================
 
-BASE_LAYOUT = dict(
-    font          = dict(family='Segoe UI, Arial, sans-serif', color='#1E293B'),
-    paper_bgcolor = 'white',
-    plot_bgcolor  = '#F8FAFF',
-    margin        = dict(l=40, r=40, t=60, b=40),
-    hoverlabel    = dict(bgcolor='white', font_size=13),
-)
+def _is_3_0(peaks_analysis: dict) -> bool:
+    return peaks_analysis.get("contract_type") == "3.0TD"
 
-FRANJAS_COLORES = {
-    'Madrugada (0h-6h)': COLORS['madrugada'],
-    'Manana (6h-12h)':   COLORS['manana'],
-    'Tarde (12h-18h)':   COLORS['tarde'],
-    'Noche (18h-24h)':   COLORS['noche'],
-}
+
+def _periods(peaks_analysis: dict):
+    if _is_3_0(peaks_analysis):
+        return ["P1", "P2", "P3", "P4", "P5", "P6"]
+    return ["P1", "P3"]
+
+
+def _card_annotation(x0, x1, title, value, subtitle="", color=COLOR_BLUE, value_size=24):
+    anns = [
+        dict(
+            x=(x0 + x1) / 2,
+            y=0.74,
+            xref="paper",
+            yref="paper",
+            text=f"<b>{title}</b>",
+            showarrow=False,
+            font=dict(size=13, color=COLOR_DARK),
+            align="center",
+        ),
+        dict(
+            x=(x0 + x1) / 2,
+            y=0.47,
+            xref="paper",
+            yref="paper",
+            text=f"<span style='font-size:{value_size}px; color:{color}'><b>{value}</b></span>",
+            showarrow=False,
+            align="center",
+        ),
+    ]
+    if subtitle:
+        anns.append(
+            dict(
+                x=(x0 + x1) / 2,
+                y=0.20,
+                xref="paper",
+                yref="paper",
+                text=subtitle,
+                showarrow=False,
+                font=dict(size=11, color=COLOR_GRAY),
+                align="center",
+            )
+        )
+    return anns
+
+
+def _franja_color(franja: str):
+    mapping = {
+        "00-08": "#1D4ED8",
+        "08-12": "#10B981",
+        "12-16": "#F59E0B",
+        "16-20": "#F97316",
+        "20-24": "#DC2626",
+    }
+    return mapping.get(franja, COLOR_BLUE)
 
 
 # =============================================================================
 # 1. KPIs
 # =============================================================================
 
-def chart_peaks_kpis(data: dict) -> go.Figure:
-    kpis = data.get('kpis', {})
-    if not kpis:
-        return go.Figure()
+def chart_peaks_kpis(peaks_analysis: dict):
+    total_peaks = peaks_analysis["total_peaks"]
+    pct_peaks = peaks_analysis["pct_peaks"]
+    top10 = peaks_analysis["top10"]
+    by_month = peaks_analysis["by_month"]
+    by_franja = peaks_analysis["by_franja"]
+
+    pico_max = max([r["consumption_kwh"] for r in top10], default=0.0)
+
+    if by_month:
+        mes_mas_picos = max(by_month.items(), key=lambda x: x[1]["num_picos"])[0].capitalize()
+    else:
+        mes_mas_picos = "—"
+
+    if by_franja:
+        franja_mas = max(by_franja.items(), key=lambda x: x[1]["num_picos"])[0]
+    else:
+        franja_mas = "—"
 
     fig = go.Figure()
 
-    valores = [
-        ('Horas sobre umbral',  data['total_picos'],              ',d',   ' h'),
-        ('% sobre umbral',      kpis['pct_sobre_umbral'],         ',.2f', '%'),
-        ('Pico maximo',         kpis['pico_maximo_kwh'],          ',.3f', ' kW'),
+    boxes = [
+        (0.00, 0.23),
+        (0.26, 0.49),
+        (0.52, 0.75),
+        (0.78, 1.00),
     ]
 
-    for i, (titulo, valor, fmt, sufijo) in enumerate(valores):
-        fig.add_trace(go.Indicator(
-            mode   = "number",
-            value  = float(valor),
-            title  = dict(text=titulo, font=dict(size=13, color=COLORS['text_light'])),
-            number = dict(suffix=sufijo, font=dict(size=26, color=COLORS['danger']),
-                          valueformat=fmt),
-            domain = dict(x=[i/3, (i+1)/3], y=[0, 1])
-        ))
+    for x0, x1 in boxes:
+        fig.add_shape(
+            type="rect",
+            xref="paper",
+            yref="paper",
+            x0=x0,
+            x1=x1,
+            y0=0.02,
+            y1=0.98,
+            line=dict(color="#E5E7EB", width=1),
+            fillcolor="white",
+        )
+
+    annotations = []
+    annotations += _card_annotation(*boxes[0], "Horas sobre umbral", f"{total_peaks}", color=COLOR_RED)
+    annotations += _card_annotation(*boxes[1], "% sobre umbral", f"{pct_peaks}%", color=COLOR_ORANGE)
+    annotations += _card_annotation(
+        *boxes[2],
+        "Pico máximo",
+        f"{pico_max} kW",
+        f"Mes con más picos: {mes_mas_picos}",
+        COLOR_RED,
+        24
+    )
+    annotations += _card_annotation(
+        *boxes[3],
+        "Franja más repetida",
+        franja_mas,
+        "",
+        COLOR_BLUE,
+        22
+    )
 
     fig.update_layout(
-        **BASE_LAYOUT,
-        height = 130,
-        title  = dict(
-            text  = f"Umbral: {data['umbral_kw']} kW  |  "
-                    f"Mes con mas picos: {kpis.get('mes_mas_picos','').capitalize()} "
-                    f"({kpis.get('picos_en_mes_mas', 0)} horas)  |  "
-                    f"Franja mas repetida: {kpis.get('franja_mas_repetida','')}",
-            font  = dict(size=12, color=COLORS['text_light']),
-            x     = 0.5
-        )
+        title="KPIs de picos",
+        template="plotly_white",
+        height=260,
+        margin=dict(l=20, r=20, t=60, b=20),
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        annotations=annotations,
     )
+
     return fig
 
 
 # =============================================================================
-# 2. TOP 10 PICOS (tabla interactiva)
+# 2. TOP 10
 # =============================================================================
 
-def chart_top10_table(data: dict) -> go.Figure:
-    top10 = data.get('top10', [])
-    if not top10:
-        fig = go.Figure()
-        fig.add_annotation(text="No hay picos sobre el umbral",
-                           xref='paper', yref='paper', x=0.5, y=0.5,
-                           showarrow=False,
-                           font=dict(size=14, color=COLORS['text_light']))
-        fig.update_layout(**BASE_LAYOUT, height=200)
-        return fig
+def chart_peaks_top10(peaks_analysis: dict):
+    rows = peaks_analysis["top10"]
 
-    fig = go.Figure(go.Table(
-        header = dict(
-            values    = ['#', 'Fecha', 'Hora', 'Dia', 'Mes',
-                         'kWh', 'Exceso kWh', 'Festivo', 'Finde',
-                         'Periodo Pot.', 'Franja'],
-            fill_color = COLORS['primary'],
-            font       = dict(color='white', size=12,
-                              family='Segoe UI, Arial, sans-serif'),
-            align      = 'center',
-            height     = 32,
-        ),
-        cells = dict(
-            values = [
-                [r['ranking']          for r in top10],
-                [r['fecha']            for r in top10],
-                [r['hora']             for r in top10],
-                [r['dia_semana']       for r in top10],
-                [r['mes']              for r in top10],
-                [r['kwh']              for r in top10],
-                [r['exceso_kwh']       for r in top10],
-                [r['es_festivo']       for r in top10],
-                [r['es_finde']         for r in top10],
-                [r['periodo_potencia'] for r in top10],
-                [r['franja']           for r in top10],
-            ],
-            fill_color = [
-                ['#FEF2F2' if i == 0 else
-                 '#FFF7ED' if i == 1 else
-                 '#FFFBEB' if i == 2 else
-                 'white'
-                 for i in range(len(top10))]
-            ] * 11,
-            font       = dict(size=12, family='Segoe UI, Arial, sans-serif',
-                              color=COLORS['text']),
-            align      = ['center'] * 11,
-            height     = 28,
-        )
-    ))
+    if not rows:
+        rows = [{
+            "fecha": "—",
+            "hora": "—",
+            "consumption_kwh": "—",
+            "exceso_kwh": "—",
+            "power_period": "—",
+            "energy_period": "—",
+        }]
+
+    df = pd.DataFrame(rows)
+
+    cols = ["fecha", "hora", "consumption_kwh", "exceso_kwh", "power_period", "energy_period"]
+    headers = ["Fecha", "Hora", "kW", "Exceso", "Periodo potencia", "Periodo energía"]
+
+    fill_colors = []
+    for i in range(len(df)):
+        if i == 0:
+            fill_colors.append("#FEE2E2")
+        elif i < 3:
+            fill_colors.append("#FEF3C7")
+        else:
+            fill_colors.append("white")
+
+    fig = go.Figure(
+        data=[
+            go.Table(
+                header=dict(
+                    values=headers,
+                    fill_color=COLOR_RED,
+                    font=dict(color="white", size=12),
+                    align="center"
+                ),
+                cells=dict(
+                    values=[df[c] for c in cols],
+                    fill_color=[fill_colors] * len(cols),
+                    align="center",
+                    font=dict(size=11),
+                    height=28
+                )
+            )
+        ]
+    )
 
     fig.update_layout(
-        **BASE_LAYOUT,
-        title  = dict(text='Top 10 Picos mas Altos', font=dict(size=16)),
-        height = 420,
+        title="Top 10 picos",
+        height=max(360, 90 + len(df) * 28)
     )
+
     return fig
 
 
 # =============================================================================
-# 3. EVOLUCION MENSUAL DE PICOS
+# 3. BY MONTH
 # =============================================================================
 
-def chart_peaks_by_month(data: dict) -> go.Figure:
-    by_month = data.get('by_month', {})
-    if not by_month:
-        return go.Figure()
+def chart_peaks_by_month(peaks_analysis: dict):
+    by_month = peaks_analysis["by_month"]
 
-    meses    = list(by_month.keys())
-    num_picos = [by_month[m]['num_picos'] for m in meses]
-    max_kwh   = [by_month[m]['max_kwh']   for m in meses]
+    meses = [m.capitalize() for m in by_month.keys()]
+    num_picos = [v["num_picos"] for v in by_month.values()]
+    max_kw = [v["max_kw"] for v in by_month.values()]
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    fig.add_trace(go.Bar(
-        x             = [m.capitalize() for m in meses],
-        y             = num_picos,
-        name          = 'Horas sobre umbral',
-        marker_color  = COLORS['danger'],
-        marker_line   = dict(color='#B91C1C', width=1),
-        hovertemplate = '<b>%{x}</b><br>Horas: %{y}<extra></extra>',
-    ), secondary_y=False)
+    fig.add_trace(
+        go.Bar(
+            x=meses,
+            y=num_picos,
+            name="Horas sobre umbral",
+            marker_color=COLOR_RED,
+        ),
+        secondary_y=False
+    )
 
-    fig.add_trace(go.Scatter(
-        x             = [m.capitalize() for m in meses],
-        y             = max_kwh,
-        name          = 'Pico maximo del mes',
-        mode          = 'lines+markers',
-        line          = dict(color=COLORS['warning'], width=2),
-        marker        = dict(size=7),
-        hovertemplate = '<b>%{x}</b><br>Pico max: %{y:.3f} kW<extra></extra>',
-    ), secondary_y=True)
+    fig.add_trace(
+        go.Scatter(
+            x=meses,
+            y=max_kw,
+            mode="lines+markers",
+            name="Pico máximo",
+            line=dict(color=COLOR_BLUE),
+        ),
+        secondary_y=True
+    )
 
     fig.update_layout(
-        **BASE_LAYOUT,
-        title   = dict(text='Evolucion Mensual de Picos', font=dict(size=16)),
-        height  = 380,
-        legend  = dict(orientation='h', y=-0.2),
+        title="Picos por mes",
+        template="plotly_white",
+        height=420,
+        legend_title_text="",
     )
-    fig.update_yaxes(title_text='Horas sobre umbral',
-                     gridcolor=COLORS['grid'], secondary_y=False)
-    fig.update_yaxes(title_text='kW (pico maximo)', secondary_y=True)
+
+    fig.update_yaxes(title_text="Nº horas", secondary_y=False)
+    fig.update_yaxes(title_text="kW", secondary_y=True)
+
     return fig
 
 
 # =============================================================================
-# 4. DISTRIBUCION POR HORA EXACTA
+# 4. BY HOUR
 # =============================================================================
 
-def chart_peaks_by_hour(data: dict) -> go.Figure:
-    by_hora = data.get('by_hora', {})
-    if not by_hora:
-        return go.Figure()
+def chart_peaks_by_hour(peaks_analysis: dict):
+    by_hour = peaks_analysis["by_hour"]
 
-    horas     = sorted(by_hora.keys())
-    num_picos = [by_hora[h]['num_picos'] for h in horas]
+    horas = list(by_hour.keys())
+    num_picos = [by_hour[h]["num_picos"] for h in horas]
 
-    # Color por franja
-    def color_hora(h):
-        if h < 6:    return COLORS['madrugada']
-        elif h < 12: return COLORS['manana']
-        elif h < 18: return COLORS['tarde']
-        else:        return COLORS['noche']
+    colors = []
+    for h in horas:
+        if 0 <= h < 8:
+            colors.append(_franja_color("00-08"))
+        elif 8 <= h < 12:
+            colors.append(_franja_color("08-12"))
+        elif 12 <= h < 16:
+            colors.append(_franja_color("12-16"))
+        elif 16 <= h < 20:
+            colors.append(_franja_color("16-20"))
+        else:
+            colors.append(_franja_color("20-24"))
 
-    colores = [color_hora(h) for h in horas]
+    fig = go.Figure()
 
-    fig = go.Figure(go.Bar(
-        x             = [f"{h:02d}:00" for h in horas],
-        y             = num_picos,
-        marker_color  = colores,
-        hovertemplate = '<b>%{x}</b><br>Picos: %{y}<extra></extra>',
-        text          = [str(v) if v > 0 else '' for v in num_picos],
-        textposition  = 'outside',
-        textfont      = dict(size=10),
-    ))
-
-    # Leyenda de franjas
-    for franja, color in FRANJAS_COLORES.items():
-        fig.add_trace(go.Bar(
-            x=[None], y=[None], name=franja,
-            marker_color=color, showlegend=True
-        ))
+    fig.add_trace(
+        go.Bar(
+            x=horas,
+            y=num_picos,
+            marker_color=colors,
+            name="Picos"
+        )
+    )
 
     fig.update_layout(
-        **BASE_LAYOUT,
-        title   = dict(text='Distribucion de Picos por Hora del Dia',
-                       font=dict(size=16)),
-        xaxis   = dict(title='Hora', gridcolor=COLORS['grid']),
-        yaxis   = dict(title='Numero de picos', gridcolor=COLORS['grid']),
-        height  = 380,
-        barmode = 'overlay',
-        legend  = dict(orientation='h', y=-0.25),
+        title="Picos por hora",
+        template="plotly_white",
+        height=420,
+        xaxis_title="Hora",
+        yaxis_title="Nº picos",
+        showlegend=False
     )
+
     return fig
 
 
 # =============================================================================
-# 5. MAPA DE CALOR: MES x HORA
+# 5. HEATMAP
 # =============================================================================
 
-def chart_peaks_heatmap(data: dict) -> go.Figure:
-    heatmap = data.get('heatmap', {})
-    if not heatmap or not heatmap.get('meses'):
-        fig = go.Figure()
-        fig.add_annotation(text="No hay suficientes datos para el mapa de calor",
-                           xref='paper', yref='paper', x=0.5, y=0.5,
-                           showarrow=False,
-                           font=dict(size=14, color=COLORS['text_light']))
-        fig.update_layout(**BASE_LAYOUT, height=300)
-        return fig
+def chart_peaks_heatmap(peaks_analysis: dict):
+    heat = peaks_analysis["heatmap"]
+    meses = heat["meses"]
+    horas = heat["horas"]
 
-    meses          = heatmap['meses']
-    horas          = heatmap['horas']
-    etiquetas_hora = [f"{h:02d}:00" for h in horas]
-
-    # Construir matriz Z (meses x horas)
     z = []
-    for mes in meses:
-        fila = [heatmap['valores'].get(mes, {}).get(hora, 0) for hora in horas]
+    for hora in horas:
+        fila = []
+        for mes in meses:
+            fila.append(heat["valores"][mes][hora])
         z.append(fila)
 
-    fig = go.Figure(go.Heatmap(
-        z              = z,
-        x              = etiquetas_hora,
-        y              = [m.capitalize() for m in meses],
-        colorscale     = [
-            [0.0,  'white'],
-            [0.01, '#FEF2F2'],
-            [0.3,  '#FCA5A5'],
-            [0.6,  '#F87171'],
-            [0.8,  '#EF4444'],
-            [1.0,  '#B91C1C'],
-        ],
-        colorbar       = dict(title='Picos', titleside='right', thickness=15),
-        hovertemplate  = '<b>%{y} — %{x}</b><br>Picos: %{z}<extra></extra>',
-        zsmooth        = False,
-    ))
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z,
+            x=meses,
+            y=horas,
+            colorscale="Reds",
+            colorbar_title="kW"
+        )
+    )
 
     fig.update_layout(
-        **BASE_LAYOUT,
-        title  = dict(text='Mapa de Calor: Picos por Mes y Hora',
-                      font=dict(size=16)),
-        xaxis  = dict(title='Hora del dia', gridcolor=COLORS['grid']),
-        yaxis  = dict(title='Mes', gridcolor=COLORS['grid']),
-        height = 420,
+        title="Heatmap mes × hora",
+        template="plotly_white",
+        height=500,
+        xaxis_title="Mes",
+        yaxis_title="Hora"
     )
+
     return fig
 
 
 # =============================================================================
-# 6. LABORABLE VS FIN DE SEMANA
+# 6. DAY TYPE
 # =============================================================================
 
-def chart_peaks_day_type(data: dict) -> go.Figure:
-    dt = data.get('by_day_type', {})
-    if not dt:
-        return go.Figure()
+def chart_peaks_day_type(peaks_analysis: dict):
+    by_day_type = peaks_analysis["by_day_type"]
 
-    labels  = ['Laborable', 'Fin de semana / Festivo']
-    valores = [dt['laborable']['num_picos'], dt['fin_de_semana']['num_picos']]
-    colores = [COLORS['laborable'], COLORS['finde']]
+    labels = ["Laborable", "Fin de semana/Festivo"]
+    values = [
+        by_day_type["laborable"]["num_picos"],
+        by_day_type["fin_de_semana"]["num_picos"],
+    ]
 
-    fig = go.Figure(go.Pie(
-        labels        = labels,
-        values        = valores,
-        hole          = 0.55,
-        marker        = dict(colors=colores, line=dict(color='white', width=2)),
-        hovertemplate = '<b>%{label}</b><br>%{value} picos<br>%{percent}<extra></extra>',
-        textinfo      = 'label+percent',
-        textfont      = dict(size=12),
-    ))
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.55,
+                marker=dict(colors=[COLOR_BLUE, COLOR_ORANGE]),
+                textinfo="label+percent"
+            )
+        ]
+    )
 
     fig.update_layout(
-        **BASE_LAYOUT,
-        title  = dict(text='Picos: Laborable vs Fin de Semana',
-                      font=dict(size=16)),
-        height = 360,
+        title="Picos por tipo de día",
+        template="plotly_white",
+        height=420,
+        annotations=[dict(text=f"{sum(values)}", x=0.5, y=0.5, showarrow=False, font=dict(size=24))]
     )
+
     return fig
 
 
 # =============================================================================
-# 7. POR PERIODO DE POTENCIA P1/P2
+# 7. BY PERIOD
 # =============================================================================
 
-def chart_peaks_by_period(data: dict) -> go.Figure:
-    bp = data.get('by_period', {})
-    if not bp:
-        return go.Figure()
+def chart_peaks_by_period(peaks_analysis: dict):
+    by_period = peaks_analysis["by_period"]
+    periodos = _periods(peaks_analysis)
 
-    labels  = ['P1 (Laborable 8h-24h)', 'P2 (Nocturno / Finde)']
-    valores = [bp['P1']['num_picos'], bp['P2']['num_picos']]
-    colores = [COLORS['p1'], COLORS['p2']]
+    labels = periodos
+    values = [by_period[p]["num_picos"] for p in periodos]
 
-    fig = go.Figure(go.Pie(
-        labels        = labels,
-        values        = valores,
-        hole          = 0.55,
-        marker        = dict(colors=colores, line=dict(color='white', width=2)),
-        hovertemplate = '<b>%{label}</b><br>%{value} picos<br>%{percent}<extra></extra>',
-        textinfo      = 'label+percent',
-        textfont      = dict(size=12),
-    ))
+    fig = go.Figure(
+        data=[
+            go.Pie(
+                labels=labels,
+                values=values,
+                hole=0.55,
+                textinfo="label+percent"
+            )
+        ]
+    )
 
     fig.update_layout(
-        **BASE_LAYOUT,
-        title  = dict(text='Picos por Periodo de Potencia',
-                      font=dict(size=16)),
-        height = 360,
+        title="Picos por periodo de potencia",
+        template="plotly_white",
+        height=420,
+        annotations=[dict(text=f"{sum(values)}", x=0.5, y=0.5, showarrow=False, font=dict(size=24))]
     )
+
     return fig
 
 
 # =============================================================================
-# FUNCION PRINCIPAL
+# MAIN
 # =============================================================================
 
-def generate_peaks_charts(data: dict) -> dict:
-    """
-    Genera todos los graficos de la Pagina 3 (Analisis de picos criticos).
-
-    Args:
-        data: Resultado de run_peaks_analysis()
-
-    Returns:
-        Diccionario con todos los Figure de Plotly
-    """
-    print("Generando graficos de picos criticos...")
-
-    graficos = {
-        'kpis':       chart_peaks_kpis(data),
-        'top10':      chart_top10_table(data),
-        'by_month':   chart_peaks_by_month(data),
-        'by_hour':    chart_peaks_by_hour(data),
-        'heatmap':    chart_peaks_heatmap(data),
-        'day_type':   chart_peaks_day_type(data),
-        'by_period':  chart_peaks_by_period(data),
+def generate_peaks_charts(peaks_analysis: dict):
+    return {
+        "kpis": chart_peaks_kpis(peaks_analysis),
+        "top10": chart_peaks_top10(peaks_analysis),
+        "by_month": chart_peaks_by_month(peaks_analysis),
+        "by_hour": chart_peaks_by_hour(peaks_analysis),
+        "heatmap": chart_peaks_heatmap(peaks_analysis),
+        "day_type": chart_peaks_day_type(peaks_analysis),
+        "by_period": chart_peaks_by_period(peaks_analysis),
     }
-
-    print(f"  {len(graficos)} graficos generados correctamente.")
-    return graficos

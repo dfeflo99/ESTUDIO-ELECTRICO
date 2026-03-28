@@ -59,10 +59,10 @@ def _card_annotation(x0, x1, title, value, subtitle="", color=COLOR_BLUE, value_
         ),
         dict(
             x=(x0 + x1) / 2,
-            y=0.50,
+            y=0.46,
             xref="paper",
             yref="paper",
-            text=f"<span style='font-size:{value_size}px; color:{color}'><b>{value}</b></span>",
+            text=f"<span style='font-size:{value_size}px; color:{color}; white-space:normal'><b>{value}</b></span>",
             showarrow=False,
             align="center",
         ),
@@ -249,7 +249,7 @@ def chart_optimization_peaks(opt_result: dict):
     periodos = _periodos(opt_result)
     contracted = opt_result["contracted_periods"]
 
-    meses = [p["mes"].capitalize() for p in picos]
+    meses = [str(p["mes"]).capitalize() for p in picos]
 
     fig = go.Figure()
 

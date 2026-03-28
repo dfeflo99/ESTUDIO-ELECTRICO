@@ -80,6 +80,17 @@ FILTER_LABEL_STYLE = {
     "marginBottom": "8px",
 }
 
+INFO_BOX_STYLE = {
+    "backgroundColor": "#EFF6FF",
+    "border": "1px solid #BFDBFE",
+    "borderRadius": "10px",
+    "padding": "14px 16px",
+    "color": COLORS["text"],
+    "fontFamily": "Segoe UI, Arial, sans-serif",
+    "fontSize": "13px",
+    "marginTop": "14px",
+}
+
 BTN_PDF_STYLE = {
     "backgroundColor": "#CC1F1F",
     "color": "white",
@@ -301,10 +312,6 @@ def build_power_layout(
     available_years = _extract_available_years(analysis)
     available_months = _extract_available_months(analysis, available_years)
 
-    subtitulo = (
-        "Ajusta umbral, potencias, año y mes para analizar el comportamiento real."
-    )
-
     return html.Div(
         style={"backgroundColor": COLORS["background"], "minHeight": "100vh", "padding": "24px"},
         children=[
@@ -313,7 +320,14 @@ def build_power_layout(
                 children=[
                     html.Div([
                         html.H1("Análisis de Potencia", style=TITLE_STYLE),
-                        html.P(subtitulo, style=SUBTITLE_STYLE),
+                        html.P(
+                            "Ajusta umbral, potencias, año y mes para analizar el comportamiento real.",
+                            style=SUBTITLE_STYLE
+                        ),
+                        html.Div(
+                            "Las potencias mostradas aquí son potencias medias de una hora calculadas a partir de la curva de consumo. No son picos instantáneos del momento.",
+                            style=INFO_BOX_STYLE
+                        ),
                     ])
                 ]
             ),

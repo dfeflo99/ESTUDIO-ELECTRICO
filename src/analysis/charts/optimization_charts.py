@@ -148,7 +148,7 @@ def chart_optimization_kpis(opt_result: dict):
             "Estado",
             estado,
             color=estado_color,
-            value_size=18
+            value_size=14
         )
 
         fig.update_layout(

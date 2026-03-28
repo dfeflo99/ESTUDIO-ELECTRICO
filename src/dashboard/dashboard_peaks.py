@@ -165,14 +165,17 @@ def _extract_available_months(analysis: ElectricityAnalysis, selected_years=None
 def _initial_umbral(analysis: ElectricityAnalysis, umbral_kw=None):
     if umbral_kw is not None:
         return umbral_kw
+
     if getattr(analysis, "peaks_analysis", None) is not None:
         pa = analysis.peaks_analysis
         if isinstance(pa, dict) and pa.get("umbral_kw") is not None:
             return pa["umbral_kw"]
+
     if getattr(analysis, "power_analysis", None) is not None:
         pw = analysis.power_analysis
         if getattr(pw, "umbral_kw", None) is not None:
             return pw.umbral_kw
+
     return 2.0
 
 
@@ -332,7 +335,6 @@ def run_peaks_dashboard(
     port: int = 8052,
 ):
     _analysis_global = analysis
-    es_3 = _is_3_0(analysis)
 
     app = dash.Dash(
         __name__,
@@ -373,12 +375,14 @@ def run_peaks_dashboard(
             empty = _message_figure("Sin datos", "No hay datos para los filtros seleccionados")
             return empty, empty, empty, empty, empty, empty, empty
 
-        result = run_peaks_analysis(
+        # run_peaks_analysis devuelve el analysis actualizado
+        analysis_with_peaks = run_peaks_analysis(
             filtered_analysis,
             umbral_kw=_default_value(umbral, 2.0),
         )
 
-        charts = generate_peaks_charts(result)
+        peaks_data = analysis_with_peaks.peaks_analysis
+        charts = generate_peaks_charts(peaks_data)
 
         return (
             charts["kpis"],

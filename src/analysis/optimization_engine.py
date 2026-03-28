@@ -4,8 +4,6 @@
 # Compatible con 2.0TD + 3.0TD
 # =============================================================================
 
-from collections import defaultdict
-
 from src.models.internal_data_model import (
     ElectricityAnalysis,
     ContractType,
@@ -18,15 +16,21 @@ from src.models.internal_data_model import (
 POTENCIAS_COMERCIALES_2_0 = [2.3, 3.45, 4.6, 5.75, 6.9, 8.05, 9.2, 10.35, 11.5, 14.49]
 
 MESES_NOMBRE = {
-    'ene': 'enero', 'feb': 'febrero', 'mar': 'marzo', 'abr': 'abril',
-    'may': 'mayo', 'jun': 'junio', 'jul': 'julio', 'ago': 'agosto',
-    'sep': 'septiembre', 'oct': 'octubre', 'nov': 'noviembre', 'dic': 'diciembre'
+    "ene": "enero", "feb": "febrero", "mar": "marzo", "abr": "abril",
+    "may": "mayo", "jun": "junio", "jul": "julio", "ago": "agosto",
+    "sep": "septiembre", "oct": "octubre", "nov": "noviembre", "dic": "diciembre",
 }
 
-MESES_ORDEN = [
-    'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
-    'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'
-]
+MESES_NUM = {
+    "01": "enero", "02": "febrero", "03": "marzo", "04": "abril",
+    "05": "mayo", "06": "junio", "07": "julio", "08": "agosto",
+    "09": "septiembre", "10": "octubre", "11": "noviembre", "12": "diciembre",
+}
+
+MESES_ORDEN = {
+    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+    "julio": 7, "agosto": 8, "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12
+}
 
 
 # =============================================================================
@@ -35,6 +39,7 @@ MESES_ORDEN = [
 
 def _round4(val):
     return round(val, 4)
+
 
 def _round2(val):
     return round(val, 2)
@@ -48,14 +53,28 @@ def _get_period_order(contract_type: ContractType):
 
 def _get_month_name(month_text: str) -> str:
     """
-    Convierte:
+    Convierte a nombre largo de mes:
     - ene-25 -> enero
     - feb-24 -> febrero
-    - 02-2024 -> feb (si viniera algo raro, mantiene aproximacion)
+    - 01- -> enero
+    - 02- -> febrero
+    - 01-2024 -> enero
+    - 12-2025 -> diciembre
     """
     text = str(month_text).strip().lower()
+
+    if not text:
+        return text
+
     corto = text[:3]
-    return MESES_NOMBRE.get(corto, corto)
+    if corto in MESES_NOMBRE:
+        return MESES_NOMBRE[corto]
+
+    dos = text[:2]
+    if dos in MESES_NUM:
+        return MESES_NUM[dos]
+
+    return text
 
 
 def _get_contracted_periods(
@@ -87,7 +106,6 @@ def _get_contracted_periods(
     }
 
     if contract_type == ContractType.TD_2_0:
-        # En tu proyecto 2.0TD usa P1 y P3
         if contracted_p2 is not None and contracted["P3"] == 0.0:
             contracted["P3"] = float(contracted_p2)
         return {"P1": contracted["P1"], "P3": contracted["P3"]}
@@ -115,21 +133,9 @@ def _hours_excess_with(records, periodo: str, umbral: float) -> int:
     )
 
 
-def _max_monthly_official_by_period(monthly_max_power: list, period: str) -> float:
-    vals = [r.max_kw for r in monthly_max_power if r.period == period]
-    return _round4(max(vals)) if vals else 0.0
-
-
 def _build_monthly_peaks(monthly_max_power: list, contract_type: ContractType, contracted: dict):
-    """
-    Construye:
-    - lista mensual ordenada
-    - compatibilidad con charts antiguos (pico_punta / pico_valle)
-    - detalle completo por periodos
-    """
     period_order = _get_period_order(contract_type)
 
-    # Agrupar por mes
     picos_por_mes = {}
     month_num_by_mes = {}
 
@@ -142,7 +148,7 @@ def _build_monthly_peaks(monthly_max_power: list, contract_type: ContractType, c
 
     meses_ordenados = sorted(
         picos_por_mes.keys(),
-        key=lambda m: month_num_by_mes.get(m, 99)
+        key=lambda m: month_num_by_mes.get(m, MESES_ORDEN.get(m, 99))
     )
 
     picos_mensuales = []
@@ -151,7 +157,7 @@ def _build_monthly_peaks(monthly_max_power: list, contract_type: ContractType, c
 
         row = {
             "mes": mes,
-            "month_num": month_num_by_mes.get(mes, 99),
+            "month_num": month_num_by_mes.get(mes, MESES_ORDEN.get(mes, 99)),
             "pot_max": datos.get("Pot.Max", 0.0),
             "periodos": {},
         }
@@ -169,9 +175,6 @@ def _build_monthly_peaks(monthly_max_power: list, contract_type: ContractType, c
                 "exceso_kw": exceso,
             }
 
-        # Alias para compatibilidad con charts viejos:
-        # - 2.0TD: punta=P1, valle=P3
-        # - 3.0TD: punta=P1, valle=P6 (solo como alias visual temporal)
         if contract_type == ContractType.TD_2_0:
             alias_2 = "P3"
         else:
@@ -213,7 +216,6 @@ def _build_excess_table(picos_mensuales: list, contract_type: ContractType):
             }
             tabla.append(row)
 
-    # Tabla completa extra para futuro 3.0TD
     tabla_full = []
     for p in picos_mensuales:
         for periodo, info in p["periodos"].items():
@@ -243,8 +245,6 @@ def _build_suggested_options(
         vals = [m["periodos"][p]["pico_kw"] for m in picos_mensuales if p in m["periodos"]]
         max_by_period[p] = _round4(max(vals)) if vals else 0.0
 
-    # Equilibrada = 90% del maximo
-    # Segura      = 100% del maximo
     eq = {}
     sg = {}
 
@@ -252,7 +252,6 @@ def _build_suggested_options(
         eq[p] = _potencia_objetivo(max_by_period[p] * 0.90, contract_type)
         sg[p] = _potencia_objetivo(max_by_period[p], contract_type)
 
-        # Si coinciden en 2.0TD, intentamos bajar una escalon la equilibrada
         if contract_type == ContractType.TD_2_0 and eq[p] == sg[p]:
             idx = POTENCIAS_COMERCIALES_2_0.index(sg[p]) if sg[p] in POTENCIAS_COMERCIALES_2_0 else 0
             eq[p] = POTENCIAS_COMERCIALES_2_0[max(0, idx - 1)]
@@ -295,7 +294,6 @@ def _build_suggested_options(
             "meses_exceso": meses_exceso_con(picos_mensuales, p, sg_kw),
         }
 
-    # Alias para compatibilidad con charts viejos
     alias_2 = "P3" if contract_type == ContractType.TD_2_0 else "P6"
 
     opciones["equilibrada"]["p1"] = opciones["equilibrada"]["periodos"].get("P1", {}).get("kw", 0.0)
@@ -338,12 +336,6 @@ def run_optimization_analysis(
     contracted_p5: float = None,
     contracted_p6: float = None,
 ) -> dict:
-    """
-    Analiza optimizacion de potencia contratada.
-    - 2.0TD: P1/P3
-    - 3.0TD: P1..P6
-    """
-
     records = analysis.hourly_records
     monthly_max_power = analysis.monthly_max_power
     contract_type = analysis.client.contract_type
@@ -367,28 +359,16 @@ def run_optimization_analysis(
     print(f"  Tipo contrato: {contract_type.value}")
     print(f"  Potencias actuales: {contracted}")
 
-    # ----------------------------------------------------------------
-    # PICOS OFICIALES POR MES
-    # ----------------------------------------------------------------
-
     picos_mensuales = _build_monthly_peaks(
         monthly_max_power=monthly_max_power,
         contract_type=contract_type,
         contracted=contracted,
     )
 
-    # ----------------------------------------------------------------
-    # TABLAS DE EXCESOS
-    # ----------------------------------------------------------------
-
     tabla_excesos, tabla_excesos_full = _build_excess_table(
         picos_mensuales=picos_mensuales,
         contract_type=contract_type,
     )
-
-    # ----------------------------------------------------------------
-    # OPCIONES SUGERIDAS
-    # ----------------------------------------------------------------
 
     opciones_sugeridas, max_by_period = _build_suggested_options(
         analysis=analysis,
@@ -396,10 +376,6 @@ def run_optimization_analysis(
         contracted=contracted,
         picos_mensuales=picos_mensuales,
     )
-
-    # ----------------------------------------------------------------
-    # KPIs
-    # ----------------------------------------------------------------
 
     meses_exceso_por_periodo = {}
     for p in _get_period_order(contract_type):
@@ -430,19 +406,14 @@ def run_optimization_analysis(
     kpis = {
         "contract_type": contract_type.value,
         "contracted_periods": contracted,
-
-        # Compatibilidad con charts viejos
         "contracted_p1": contracted.get("P1", 0.0),
         "contracted_p2": contracted.get(alias_2, 0.0),
-
         "meses_exceso_p1": meses_exceso_por_periodo.get("P1", 0),
         "meses_exceso_p2": meses_exceso_por_periodo.get(alias_2, 0),
         "max_pico_punta": max_by_period.get("P1", 0.0),
         "max_pico_valle": max_by_period.get(alias_2, 0.0),
-
         "meses_exceso_por_periodo": meses_exceso_por_periodo,
         "max_picos_por_periodo": max_by_period,
-
         "tiene_exceso": tiene_exceso,
         "mes_max_exceso_p1": mes_max_exceso_p1,
         "mes_max_exceso_p2": mes_max_exceso_p2,
@@ -453,10 +424,6 @@ def run_optimization_analysis(
     print("  Maximos por periodo:")
     for p, v in max_by_period.items():
         print(f"    {p}: {v} kW")
-
-    # ----------------------------------------------------------------
-    # RESULTADO FINAL
-    # ----------------------------------------------------------------
 
     result = {
         "contract_type": contract_type.value,

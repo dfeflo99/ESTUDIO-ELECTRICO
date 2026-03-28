@@ -22,7 +22,6 @@ COLOR_RED = "#CC1F1F"
 COLOR_ORANGE = "#F5A623"
 COLOR_BLUE = "#2563EB"
 COLOR_GREEN = "#16A34A"
-COLOR_LIGHT = "#F9FAFB"
 COLOR_DARK = "#111827"
 COLOR_GRAY = "#6B7280"
 
@@ -45,7 +44,9 @@ def _alias2(opt_result: dict) -> str:
     return opt_result.get("alias_periodo_2", "P3")
 
 
-def _card_annotation(x0, x1, title, value, subtitle="", color=COLOR_BLUE, value_size=26):
+def _card_annotation(x0, x1, title, value, subtitle="", color=COLOR_BLUE, value_size=26, value_x=None):
+    cx = (x0 + x1) / 2 if value_x is None else value_x
+
     ann = [
         dict(
             x=(x0 + x1) / 2,
@@ -56,15 +57,17 @@ def _card_annotation(x0, x1, title, value, subtitle="", color=COLOR_BLUE, value_
             showarrow=False,
             font=dict(size=14, color=COLOR_DARK),
             align="center",
+            xanchor="center",
         ),
         dict(
-            x=(x0 + x1) / 2,
+            x=cx,
             y=0.46,
             xref="paper",
             yref="paper",
             text=f"<span style='font-size:{value_size}px; color:{color}; white-space:normal'><b>{value}</b></span>",
             showarrow=False,
             align="center",
+            xanchor="center",
         ),
     ]
 
@@ -79,6 +82,7 @@ def _card_annotation(x0, x1, title, value, subtitle="", color=COLOR_BLUE, value_
                 showarrow=False,
                 font=dict(size=12, color=COLOR_GRAY),
                 align="center",
+                xanchor="center",
             )
         )
 
@@ -127,28 +131,32 @@ def chart_optimization_kpis(opt_result: dict):
             "Potencias actuales",
             f"P1: {kpis['contracted_p1']} / {alias2}: {kpis['contracted_p2']}",
             color=COLOR_BLUE,
-            value_size=24
+            value_size=22,
+            value_x=0.125,
         )
         annotations += _card_annotation(
             *boxes[1],
             "Meses con exceso",
             f"P1: {kpis['meses_exceso_p1']} / {alias2}: {kpis['meses_exceso_p2']}",
             color=COLOR_ORANGE,
-            value_size=24
+            value_size=22,
+            value_x=0.375,
         )
         annotations += _card_annotation(
             *boxes[2],
             "Pico máximo",
             f"P1: {kpis['max_pico_punta']} / {alias2}: {kpis['max_pico_valle']}",
             color=COLOR_RED,
-            value_size=24
+            value_size=20,
+            value_x=0.625,
         )
         annotations += _card_annotation(
             *boxes[3],
             "Estado",
             estado,
             color=estado_color,
-            value_size=14
+            value_size=12,
+            value_x=0.89,
         )
 
         fig.update_layout(
@@ -162,7 +170,7 @@ def chart_optimization_kpis(opt_result: dict):
         )
         return fig
 
-    # 3.0TD: visual más legible
+    # 3.0TD
     periodos = _periodos(opt_result)
     contracted = kpis.get("contracted_periods", {})
     meses_exceso = kpis.get("meses_exceso_por_periodo", {})
@@ -174,10 +182,10 @@ def chart_optimization_kpis(opt_result: dict):
         subplot_titles=(
             "Contratada vs pico máximo",
             "Meses con exceso por periodo",
-            "Estado"
+            "Estado",
         ),
         specs=[[{"type": "bar"}, {"type": "bar"}, {"type": "indicator"}]],
-        column_widths=[0.42, 0.33, 0.25]
+        column_widths=[0.42, 0.33, 0.25],
     )
 
     fig.add_trace(
@@ -187,7 +195,7 @@ def chart_optimization_kpis(opt_result: dict):
             name="Contratada",
             marker_color=COLOR_BLUE,
         ),
-        row=1, col=1
+        row=1, col=1,
     )
 
     fig.add_trace(
@@ -197,7 +205,7 @@ def chart_optimization_kpis(opt_result: dict):
             name="Pico máximo",
             marker_color=COLOR_RED,
         ),
-        row=1, col=1
+        row=1, col=1,
     )
 
     fig.add_trace(
@@ -209,7 +217,7 @@ def chart_optimization_kpis(opt_result: dict):
             text=[meses_exceso.get(p, 0) for p in periodos],
             textposition="outside",
         ),
-        row=1, col=2
+        row=1, col=2,
     )
 
     estado = "Hay periodos a revisar" if kpis.get("tiene_exceso") else "Potencia bien ajustada"
@@ -222,7 +230,7 @@ def chart_optimization_kpis(opt_result: dict):
             title={"text": f"<b>{estado}</b><br><span style='font-size:12px'>Suma meses con exceso</span>"},
             number={"font": {"size": 42, "color": estado_color}},
         ),
-        row=1, col=3
+        row=1, col=3,
     )
 
     fig.update_layout(
@@ -309,7 +317,7 @@ def chart_optimization_excess(opt_result: dict):
                 x=0.5, y=0.5,
                 xref="paper", yref="paper",
                 showarrow=False,
-                font=dict(size=20, color=COLOR_GREEN)
+                font=dict(size=20, color=COLOR_GREEN),
             )
             fig.update_layout(
                 title="Excesos registrados",
@@ -338,7 +346,7 @@ def chart_optimization_excess(opt_result: dict):
                 x=0.5, y=0.5,
                 xref="paper", yref="paper",
                 showarrow=False,
-                font=dict(size=20, color=COLOR_GREEN)
+                font=dict(size=20, color=COLOR_GREEN),
             )
             fig.update_layout(
                 title="Excesos registrados",
@@ -360,22 +368,22 @@ def chart_optimization_excess(opt_result: dict):
                     values=list(df.columns),
                     fill_color=COLOR_RED,
                     font=dict(color="white", size=12),
-                    align="center"
+                    align="center",
                 ),
                 cells=dict(
                     values=[df[col] for col in df.columns],
                     fill_color="white",
                     align="center",
                     font=dict(size=11),
-                    height=28
-                )
+                    height=28,
+                ),
             )
         ]
     )
 
     fig.update_layout(
         title="Excesos registrados",
-        height=max(320, 90 + len(df) * 28)
+        height=max(320, 90 + len(df) * 28),
     )
 
     return fig
@@ -420,16 +428,16 @@ def chart_optimization_options(opt_result: dict):
                 values=list(df_eq.columns),
                 fill_color=COLOR_ORANGE,
                 font=dict(color="white", size=12),
-                align="center"
+                align="center",
             ),
             cells=dict(
                 values=[df_eq[c] for c in df_eq.columns],
                 fill_color="#FFF7ED",
                 align="center",
-                height=28
-            )
+                height=28,
+            ),
         ),
-        row=1, col=1
+        row=1, col=1,
     )
 
     fig.add_trace(
@@ -438,21 +446,21 @@ def chart_optimization_options(opt_result: dict):
                 values=list(df_sg.columns),
                 fill_color=COLOR_GREEN,
                 font=dict(color="white", size=12),
-                align="center"
+                align="center",
             ),
             cells=dict(
                 values=[df_sg[c] for c in df_sg.columns],
                 fill_color="#ECFDF5",
                 align="center",
-                height=28
-            )
+                height=28,
+            ),
         ),
-        row=1, col=2
+        row=1, col=2,
     )
 
     fig.update_layout(
         title="Opciones sugeridas",
-        height=460
+        height=460,
     )
 
     return fig

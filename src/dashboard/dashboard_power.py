@@ -91,6 +91,22 @@ BTN_PDF_STYLE = {
 }
 
 
+MONTH_OPTIONS = [
+    {"label": "Enero", "value": "Enero"},
+    {"label": "Febrero", "value": "Febrero"},
+    {"label": "Marzo", "value": "Marzo"},
+    {"label": "Abril", "value": "Abril"},
+    {"label": "Mayo", "value": "Mayo"},
+    {"label": "Junio", "value": "Junio"},
+    {"label": "Julio", "value": "Julio"},
+    {"label": "Agosto", "value": "Agosto"},
+    {"label": "Septiembre", "value": "Septiembre"},
+    {"label": "Octubre", "value": "Octubre"},
+    {"label": "Noviembre", "value": "Noviembre"},
+    {"label": "Diciembre", "value": "Diciembre"},
+]
+
+
 # =============================================================================
 # HELPERS
 # =============================================================================
@@ -231,9 +247,9 @@ def build_power_layout(
     init_umbral = _initial_umbral(analysis, umbral_kw)
 
     subtitulo = (
-        "Ajusta el umbral y las potencias contratadas para analizar el perfil real."
-        if _is_3_0(analysis)
-        else "Ajusta umbral y potencias contratadas para ver el perfil y los máximos reales."
+        "Ajusta el umbral y potencias contratadas para ver el perfil y los máximos reales."
+        if not _is_3_0(analysis)
+        else "Ajusta umbral, potencias y filtro de mes para analizar el comportamiento real."
     )
 
     return html.Div(
@@ -253,7 +269,7 @@ def build_power_layout(
                 style=CARD_STYLE,
                 children=[
                     html.Div(
-                        style={"display": "grid", "gridTemplateColumns": "1.5fr 1fr", "gap": "24px"},
+                        style={"display": "grid", "gridTemplateColumns": "1.3fr 1fr 1fr", "gap": "24px"},
                         children=[
                             html.Div([
                                 html.P("Potencias contratadas actuales / simuladas", style=FILTER_LABEL_STYLE),
@@ -269,6 +285,16 @@ def build_power_layout(
                                     value=init_umbral,
                                     marks={i: str(i) for i in range(1, 13 if _is_3_0(analysis) else 7)},
                                     tooltip={"placement": "bottom", "always_visible": True},
+                                ),
+                            ]),
+                            html.Div([
+                                html.P("Filtrar por mes", style=FILTER_LABEL_STYLE),
+                                dcc.Dropdown(
+                                    id="pw-month-filter",
+                                    options=MONTH_OPTIONS,
+                                    value=[],
+                                    multi=True,
+                                    placeholder="Todos los meses",
                                 ),
                             ]),
                         ]
@@ -304,6 +330,11 @@ def build_power_layout(
             html.Div(style=CARD_STYLE, children=[
                 html.P("Picos oficiales mensuales", style=SECTION_TITLE_STYLE),
                 dcc.Graph(id="pw-monthly-official", config={"displayModeBar": False}),
+            ]),
+
+            html.Div(style=CARD_STYLE, children=[
+                html.P("Tabla de valores mensuales", style=SECTION_TITLE_STYLE),
+                dcc.Graph(id="pw-monthly-official-table", config={"displayModeBar": False}),
             ]),
 
             html.Div(style={**CARD_STYLE, "textAlign": "center", "padding": "24px"}, children=[
@@ -356,15 +387,17 @@ def run_power_dashboard(
         Output("pw-ranking", "figure"),
         Output("pw-profile", "figure"),
         Output("pw-monthly-official", "figure"),
+        Output("pw-monthly-official-table", "figure"),
         Input("pw-p1-input", "value"),
         Input("pw-p3-input", "value"),
         Input("pw-umbral-slider", "value"),
+        Input("pw-month-filter", "value"),
         Input("pw-p2-input", "value") if es_3 else Input("pw-p1-input", "value"),
         Input("pw-p4-input", "value") if es_3 else Input("pw-p1-input", "value"),
         Input("pw-p5-input", "value") if es_3 else Input("pw-p1-input", "value"),
         Input("pw-p6-input", "value") if es_3 else Input("pw-p1-input", "value"),
     )
-    def update_charts(p1, p3, umbral, p2_dummy_or_real, p4_dummy_or_real, p5_dummy_or_real, p6_dummy_or_real):
+    def update_charts(p1, p3, umbral, selected_months, p2_dummy_or_real, p4_dummy_or_real, p5_dummy_or_real, p6_dummy_or_real):
         if es_3:
             data = run_power_analysis(
                 _analysis_global,
@@ -384,7 +417,10 @@ def run_power_dashboard(
                 umbral_kw=_default_value(umbral, 2.0),
             )
 
-        charts = generate_power_charts(data.power_analysis)
+        charts = generate_power_charts(
+            data.power_analysis,
+            selected_months=selected_months or []
+        )
 
         return (
             charts["kpis"],
@@ -393,6 +429,7 @@ def run_power_dashboard(
             charts["ranking"],
             charts["profile"],
             charts["monthly_official"],
+            charts["monthly_official_table"],
         )
 
     @app.callback(
@@ -401,13 +438,14 @@ def run_power_dashboard(
         State("pw-p1-input", "value"),
         State("pw-p3-input", "value"),
         State("pw-umbral-slider", "value"),
+        State("pw-month-filter", "value"),
         State("pw-p2-input", "value") if es_3 else State("pw-p1-input", "value"),
         State("pw-p4-input", "value") if es_3 else State("pw-p1-input", "value"),
         State("pw-p5-input", "value") if es_3 else State("pw-p1-input", "value"),
         State("pw-p6-input", "value") if es_3 else State("pw-p1-input", "value"),
         prevent_initial_call=True
     )
-    def download_pdf(n_clicks, p1, p3, umbral, p2_dummy_or_real, p4_dummy_or_real, p5_dummy_or_real, p6_dummy_or_real):
+    def download_pdf(n_clicks, p1, p3, umbral, selected_months, p2_dummy_or_real, p4_dummy_or_real, p5_dummy_or_real, p6_dummy_or_real):
         params = {
             "contracted_p1": _default_value(p1, 10.0 if es_3 else 2.3),
             "contracted_p2": _default_value(p2_dummy_or_real, 8.0) if es_3 else _default_value(p3, 2.3),
@@ -416,7 +454,7 @@ def run_power_dashboard(
             "contracted_p5": _default_value(p5_dummy_or_real, 5.0) if es_3 else None,
             "contracted_p6": _default_value(p6_dummy_or_real, 5.0) if es_3 else None,
             "umbral_kw": _default_value(umbral, 2.0),
-            "meses_filtro": [],
+            "meses_filtro": selected_months or [],
         }
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:

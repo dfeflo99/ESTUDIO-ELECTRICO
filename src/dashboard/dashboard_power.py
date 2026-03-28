@@ -4,6 +4,7 @@
 # Compatible con 2.0TD + 3.0TD
 # =============================================================================
 
+import copy
 import os
 import sys
 import tempfile
@@ -11,6 +12,7 @@ import tempfile
 import dash
 from dash import dcc, html, Input, Output, State
 import dash_bootstrap_components as dbc
+import plotly.graph_objects as go
 
 sys.path.append("../..")
 
@@ -90,21 +92,13 @@ BTN_PDF_STYLE = {
     "cursor": "pointer",
 }
 
+MONTH_NUM_TO_NAME = {
+    1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+    5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+    9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+}
 
-MONTH_OPTIONS = [
-    {"label": "Enero", "value": "Enero"},
-    {"label": "Febrero", "value": "Febrero"},
-    {"label": "Marzo", "value": "Marzo"},
-    {"label": "Abril", "value": "Abril"},
-    {"label": "Mayo", "value": "Mayo"},
-    {"label": "Junio", "value": "Junio"},
-    {"label": "Julio", "value": "Julio"},
-    {"label": "Agosto", "value": "Agosto"},
-    {"label": "Septiembre", "value": "Septiembre"},
-    {"label": "Octubre", "value": "Octubre"},
-    {"label": "Noviembre", "value": "Noviembre"},
-    {"label": "Diciembre", "value": "Diciembre"},
-]
+MONTH_NAME_TO_NUM = {v: k for k, v in MONTH_NUM_TO_NAME.items()}
 
 
 # =============================================================================
@@ -122,6 +116,40 @@ def _default_value(value, fallback):
         return float(value)
     except Exception:
         return fallback
+
+
+def _message_figure(title, text):
+    fig = go.Figure()
+    fig.add_annotation(
+        text=f"<b>{text}</b>",
+        x=0.5, y=0.5,
+        xref="paper", yref="paper",
+        showarrow=False,
+        font=dict(size=18, color="#6B7280")
+    )
+    fig.update_layout(
+        title=title,
+        template="plotly_white",
+        height=380,
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+    )
+    return fig
+
+
+def _extract_available_years(analysis: ElectricityAnalysis):
+    years = sorted({r.timestamp.year for r in analysis.hourly_records})
+    return years
+
+
+def _extract_available_months(analysis: ElectricityAnalysis, selected_years=None):
+    months = []
+    for r in analysis.hourly_records:
+        if selected_years and r.timestamp.year not in selected_years:
+            continue
+        months.append(r.timestamp.month)
+    months = sorted(set(months))
+    return [MONTH_NUM_TO_NAME[m] for m in months]
 
 
 def _initial_power_values(
@@ -225,6 +253,30 @@ def _initial_umbral(analysis: ElectricityAnalysis, umbral_kw=None):
     return 2.0
 
 
+def _filter_analysis(analysis: ElectricityAnalysis, selected_years=None, selected_month=None):
+    filtered = copy.deepcopy(analysis)
+
+    selected_years = selected_years or []
+    month_num = MONTH_NAME_TO_NUM.get(selected_month) if selected_month else None
+
+    def keep_timestamp(ts):
+        ok_year = (not selected_years) or (ts.year in selected_years)
+        ok_month = (month_num is None) or (ts.month == month_num)
+        return ok_year and ok_month
+
+    filtered.hourly_records = [r for r in analysis.hourly_records if keep_timestamp(r.timestamp)]
+
+    if hasattr(analysis, "monthly_max_power") and analysis.monthly_max_power:
+        filtered.monthly_max_power = [
+            r for r in analysis.monthly_max_power
+            if keep_timestamp(r.date)
+        ]
+    else:
+        filtered.monthly_max_power = []
+
+    return filtered
+
+
 # =============================================================================
 # LAYOUT
 # =============================================================================
@@ -246,10 +298,11 @@ def build_power_layout(
     )
     init_umbral = _initial_umbral(analysis, umbral_kw)
 
+    available_years = _extract_available_years(analysis)
+    available_months = _extract_available_months(analysis, available_years)
+
     subtitulo = (
-        "Ajusta el umbral y potencias contratadas para ver el perfil y los máximos reales."
-        if not _is_3_0(analysis)
-        else "Ajusta umbral, potencias y filtro de mes para analizar el comportamiento real."
+        "Ajusta umbral, potencias, año y mes para analizar el comportamiento real."
     )
 
     return html.Div(
@@ -269,7 +322,7 @@ def build_power_layout(
                 style=CARD_STYLE,
                 children=[
                     html.Div(
-                        style={"display": "grid", "gridTemplateColumns": "1.3fr 1fr 1fr", "gap": "24px"},
+                        style={"display": "grid", "gridTemplateColumns": "1.3fr 1fr 1fr 1fr", "gap": "24px"},
                         children=[
                             html.Div([
                                 html.P("Potencias contratadas actuales / simuladas", style=FILTER_LABEL_STYLE),
@@ -288,12 +341,22 @@ def build_power_layout(
                                 ),
                             ]),
                             html.Div([
+                                html.P("Filtrar por año", style=FILTER_LABEL_STYLE),
+                                dcc.Dropdown(
+                                    id="pw-year-filter",
+                                    options=[{"label": str(y), "value": y} for y in available_years],
+                                    value=available_years,
+                                    multi=True,
+                                    placeholder="Todos los años",
+                                ),
+                            ]),
+                            html.Div([
                                 html.P("Filtrar por mes", style=FILTER_LABEL_STYLE),
                                 dcc.Dropdown(
                                     id="pw-month-filter",
-                                    options=MONTH_OPTIONS,
-                                    value=[],
-                                    multi=True,
+                                    options=[{"label": m, "value": m} for m in available_months],
+                                    value=None,
+                                    clearable=True,
                                     placeholder="Todos los meses",
                                 ),
                             ]),
@@ -318,7 +381,7 @@ def build_power_layout(
             ]),
 
             html.Div(style=CARD_STYLE, children=[
-                html.P("Curva de duración", style=SECTION_TITLE_STYLE),
+                html.P("Distribución horaria estimada", style=SECTION_TITLE_STYLE),
                 dcc.Graph(id="pw-ranking", config={"displayModeBar": False}),
             ]),
 
@@ -381,6 +444,14 @@ def run_power_dashboard(
     )
 
     @app.callback(
+        Output("pw-month-filter", "options"),
+        Input("pw-year-filter", "value"),
+    )
+    def update_month_options(selected_years):
+        months = _extract_available_months(_analysis_global, selected_years)
+        return [{"label": m, "value": m} for m in months]
+
+    @app.callback(
         Output("pw-kpis", "figure"),
         Output("pw-daily-max", "figure"),
         Output("pw-heatmap", "figure"),
@@ -391,16 +462,27 @@ def run_power_dashboard(
         Input("pw-p1-input", "value"),
         Input("pw-p3-input", "value"),
         Input("pw-umbral-slider", "value"),
+        Input("pw-year-filter", "value"),
         Input("pw-month-filter", "value"),
         Input("pw-p2-input", "value") if es_3 else Input("pw-p1-input", "value"),
         Input("pw-p4-input", "value") if es_3 else Input("pw-p1-input", "value"),
         Input("pw-p5-input", "value") if es_3 else Input("pw-p1-input", "value"),
         Input("pw-p6-input", "value") if es_3 else Input("pw-p1-input", "value"),
     )
-    def update_charts(p1, p3, umbral, selected_months, p2_dummy_or_real, p4_dummy_or_real, p5_dummy_or_real, p6_dummy_or_real):
+    def update_charts(p1, p3, umbral, selected_years, selected_month, p2_dummy_or_real, p4_dummy_or_real, p5_dummy_or_real, p6_dummy_or_real):
+        filtered_analysis = _filter_analysis(
+            _analysis_global,
+            selected_years=selected_years or [],
+            selected_month=selected_month,
+        )
+
+        if not filtered_analysis.hourly_records:
+            empty = _message_figure("Sin datos", "No hay datos para los filtros seleccionados")
+            return empty, empty, empty, empty, empty, empty, empty
+
         if es_3:
             data = run_power_analysis(
-                _analysis_global,
+                filtered_analysis,
                 contracted_p1=_default_value(p1, 10.0),
                 contracted_p2=_default_value(p2_dummy_or_real, 8.0),
                 contracted_p3=_default_value(p3, 7.0),
@@ -411,16 +493,13 @@ def run_power_dashboard(
             )
         else:
             data = run_power_analysis(
-                _analysis_global,
+                filtered_analysis,
                 contracted_p1=_default_value(p1, 2.3),
                 contracted_p2=_default_value(p3, 2.3),
                 umbral_kw=_default_value(umbral, 2.0),
             )
 
-        charts = generate_power_charts(
-            data.power_analysis,
-            selected_months=selected_months or []
-        )
+        charts = generate_power_charts(data.power_analysis)
 
         return (
             charts["kpis"],
@@ -438,6 +517,7 @@ def run_power_dashboard(
         State("pw-p1-input", "value"),
         State("pw-p3-input", "value"),
         State("pw-umbral-slider", "value"),
+        State("pw-year-filter", "value"),
         State("pw-month-filter", "value"),
         State("pw-p2-input", "value") if es_3 else State("pw-p1-input", "value"),
         State("pw-p4-input", "value") if es_3 else State("pw-p1-input", "value"),
@@ -445,7 +525,7 @@ def run_power_dashboard(
         State("pw-p6-input", "value") if es_3 else State("pw-p1-input", "value"),
         prevent_initial_call=True
     )
-    def download_pdf(n_clicks, p1, p3, umbral, selected_months, p2_dummy_or_real, p4_dummy_or_real, p5_dummy_or_real, p6_dummy_or_real):
+    def download_pdf(n_clicks, p1, p3, umbral, selected_years, selected_month, p2_dummy_or_real, p4_dummy_or_real, p5_dummy_or_real, p6_dummy_or_real):
         params = {
             "contracted_p1": _default_value(p1, 10.0 if es_3 else 2.3),
             "contracted_p2": _default_value(p2_dummy_or_real, 8.0) if es_3 else _default_value(p3, 2.3),
@@ -454,7 +534,8 @@ def run_power_dashboard(
             "contracted_p5": _default_value(p5_dummy_or_real, 5.0) if es_3 else None,
             "contracted_p6": _default_value(p6_dummy_or_real, 5.0) if es_3 else None,
             "umbral_kw": _default_value(umbral, 2.0),
-            "meses_filtro": selected_months or [],
+            "meses_filtro": [selected_month] if selected_month else [],
+            "years_filtro": selected_years or [],
         }
 
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:

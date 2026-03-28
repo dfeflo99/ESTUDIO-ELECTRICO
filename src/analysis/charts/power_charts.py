@@ -205,15 +205,29 @@ def chart_daily_max(power_analysis):
     fig = go.Figure()
 
     if _is_3_0(power_analysis):
-        periodos = [p for p in ["P1", "P2", "P3", "P4", "P5", "P6"] if p in df.columns]
-        for p in periodos:
+        periodos_disponibles = [p for p in ["P1", "P2", "P3", "P4", "P5", "P6"] if p in df.columns]
+
+        if periodos_disponibles:
+            for p in periodos_disponibles:
+                fig.add_trace(
+                    go.Scatter(
+                        x=df["fecha"],
+                        y=df[p],
+                        mode="lines+markers",
+                        name=p,
+                        hovertemplate=f"Fecha: %{{x|%d/%m/%Y}}<br>Periodo: {p}<br>kW: %{{y}}<extra></extra>",
+                    )
+                )
+        else:
+            # fallback si el engine no trae P1..P6 separados
             fig.add_trace(
                 go.Scatter(
                     x=df["fecha"],
-                    y=df[p],
+                    y=df["max_kw"],
                     mode="lines+markers",
-                    name=p,
-                    hovertemplate=f"Fecha: %{{x|%d/%m/%Y}}<br>Periodo: {p}<br>kW: %{{y}}<extra></extra>",
+                    name="Máx diario",
+                    line=dict(color=COLOR_BLUE),
+                    hovertemplate="Fecha: %{x|%d/%m/%Y}<br>kW: %{y}<extra></extra>",
                 )
             )
     else:
@@ -257,6 +271,7 @@ def chart_power_heatmap(power_analysis):
 
     month_name = _month_name_from_any(heat.get("month_name", heat.get("month_num", "")))
     year_val = heat.get("year", "")
+    month_num = heat.get("month_num")
 
     for hora in horas:
         fila_z = []
@@ -264,7 +279,12 @@ def chart_power_heatmap(power_analysis):
         for dia in dias:
             valor = heat["valores"][hora][dia]
             fila_z.append(valor)
-            fecha_txt = f"{dia:02d}/{heat.get('month_num', 0):02d}/{year_val}" if heat.get("month_num") else f"{dia:02d}"
+
+            if month_num and year_val:
+                fecha_txt = f"{dia:02d}/{month_num:02d}/{year_val}"
+            else:
+                fecha_txt = f"{dia:02d}"
+
             fila_custom.append([fecha_txt, hora, valor])
         z.append(fila_z)
         custom.append(fila_custom)

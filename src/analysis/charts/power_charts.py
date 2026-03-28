@@ -19,7 +19,6 @@ COLOR_GREEN = "#16A34A"
 COLOR_GRAY = "#6B7280"
 COLOR_DARK = "#111827"
 
-
 MONTH_NUM_TO_NAME = {
     1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
     5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
@@ -35,12 +34,6 @@ def _is_3_0(power_analysis) -> bool:
     return getattr(power_analysis, "contract_type", "") == "3.0TD"
 
 
-def _periods_for_contract(power_analysis):
-    if _is_3_0(power_analysis):
-        return ["P1", "P2", "P3", "P4", "P5", "P6"]
-    return ["P1", "P3"]
-
-
 def _month_name_from_any(x):
     if isinstance(x, int):
         return MONTH_NUM_TO_NAME.get(x, str(x))
@@ -52,7 +45,7 @@ def _month_name_from_any(x):
         "feb": "Febrero", "febrero": "Febrero",
         "mar": "Marzo", "marzo": "Marzo",
         "abr": "Abril", "abril": "Abril",
-        "may": "Mayo",
+        "may": "Mayo", "mayo": "Mayo",
         "jun": "Junio", "junio": "Junio",
         "jul": "Julio", "julio": "Julio",
         "ago": "Agosto", "agosto": "Agosto",
@@ -73,8 +66,8 @@ def _month_name_from_any(x):
     return text.capitalize()
 
 
-def _card_annotation(x0, x1, title, value, subtitle="", color=COLOR_BLUE, value_size=22):
-    return [
+def _card_annotation(x0, x1, title, value, subtitle="", color=COLOR_BLUE, value_size=20):
+    anns = [
         dict(
             x=(x0 + x1) / 2,
             y=0.76,
@@ -96,19 +89,43 @@ def _card_annotation(x0, x1, title, value, subtitle="", color=COLOR_BLUE, value_
             align="center",
             xanchor="center",
         ),
-    ] + (
-        [dict(
-            x=(x0 + x1) / 2,
-            y=0.22,
-            xref="paper",
-            yref="paper",
-            text=subtitle,
-            showarrow=False,
-            font=dict(size=11, color=COLOR_GRAY),
-            align="center",
-            xanchor="center",
-        )] if subtitle else []
+    ]
+
+    if subtitle:
+        anns.append(
+            dict(
+                x=(x0 + x1) / 2,
+                y=0.22,
+                xref="paper",
+                yref="paper",
+                text=subtitle,
+                showarrow=False,
+                font=dict(size=11, color=COLOR_GRAY),
+                align="center",
+                xanchor="center",
+            )
+        )
+
+    return anns
+
+
+def _message_figure(title, text):
+    fig = go.Figure()
+    fig.add_annotation(
+        text=f"<b>{text}</b>",
+        x=0.5, y=0.5,
+        xref="paper", yref="paper",
+        showarrow=False,
+        font=dict(size=18, color=COLOR_GRAY)
     )
+    fig.update_layout(
+        title=title,
+        template="plotly_white",
+        height=380,
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+    )
+    return fig
 
 
 # =============================================================================
@@ -140,11 +157,11 @@ def chart_power_kpis(power_analysis):
         )
 
     annotations = []
-    annotations += _card_annotation(*boxes[0], "Máx. potencia", f"{power_analysis.max_power_kw} kW", color=COLOR_RED, value_size=20)
-    annotations += _card_annotation(*boxes[1], "P99", f"{power_analysis.p99_power_kw} kW", color=COLOR_ORANGE, value_size=20)
-    annotations += _card_annotation(*boxes[2], "Factor de carga", f"{power_analysis.load_factor}", color=COLOR_BLUE, value_size=20)
-    annotations += _card_annotation(*boxes[3], "Horas > umbral", f"{power_analysis.hours_exceeds_2kw}", color=COLOR_RED, value_size=20)
-    annotations += _card_annotation(*boxes[4], "% > umbral", f"{power_analysis.pct_exceeds_2kw}%", color=COLOR_ORANGE, value_size=20)
+    annotations += _card_annotation(*boxes[0], "Máx. potencia", f"{power_analysis.max_power_kw} kW", color=COLOR_RED)
+    annotations += _card_annotation(*boxes[1], "P99", f"{power_analysis.p99_power_kw} kW", color=COLOR_ORANGE)
+    annotations += _card_annotation(*boxes[2], "Factor de carga", f"{power_analysis.load_factor}", color=COLOR_BLUE)
+    annotations += _card_annotation(*boxes[3], "Horas > umbral", f"{power_analysis.hours_exceeds_2kw}", color=COLOR_RED)
+    annotations += _card_annotation(*boxes[4], "% > umbral", f"{power_analysis.pct_exceeds_2kw}%", color=COLOR_ORANGE)
 
     fig.update_layout(
         title="KPIs de potencia",
@@ -163,7 +180,7 @@ def chart_power_kpis(power_analysis):
 # 2. DAILY MAX
 # =============================================================================
 
-def chart_daily_max_filtered(power_analysis, selected_months=None):
+def chart_daily_max(power_analysis):
     daily = power_analysis.daily_max_power
 
     rows = []
@@ -171,19 +188,15 @@ def chart_daily_max_filtered(power_analysis, selected_months=None):
         rows.append({
             "fecha": fecha,
             "max_kw": info["max_kw"],
-            "month_num": info.get("month_num"),
-            "month_name": _month_name_from_any(info.get("month_name", info.get("month_num"))),
         })
 
     df = pd.DataFrame(rows)
     if df.empty:
-        return go.Figure()
+        return _message_figure("Potencia máxima diaria", "No hay datos para los filtros seleccionados")
 
-    if selected_months:
-        df = df[df["month_name"].isin(selected_months)]
+    df = df.sort_values("fecha")
 
     fig = go.Figure()
-
     fig.add_trace(
         go.Scatter(
             x=df["fecha"],
@@ -193,22 +206,6 @@ def chart_daily_max_filtered(power_analysis, selected_months=None):
             line=dict(color=COLOR_BLUE),
         )
     )
-
-    contracted = power_analysis.contracted_powers
-    periods = _periods_for_contract(power_analysis)
-
-    for p in periods:
-        kw = getattr(contracted, p.lower(), 0.0) or 0.0
-        if kw > 0:
-            fig.add_trace(
-                go.Scatter(
-                    x=df["fecha"],
-                    y=[kw] * len(df),
-                    mode="lines",
-                    name=f"Contratada {p}",
-                    line=dict(dash="dash"),
-                )
-            )
 
     fig.update_layout(
         title="Potencia máxima diaria",
@@ -226,30 +223,13 @@ def chart_daily_max_filtered(power_analysis, selected_months=None):
 # 3. HEATMAP
 # =============================================================================
 
-def chart_power_heatmap_filtered(power_analysis, selected_months=None):
+def chart_power_heatmap(power_analysis):
     heat = power_analysis.hourly_power_heatmap
-    horas = heat["horas"]
-    dias = heat["dias"]
+    horas = heat.get("horas", [])
+    dias = heat.get("dias", [])
 
-    month_name = _month_name_from_any(heat.get("month_name", heat.get("month_num")))
-
-    if selected_months and month_name not in selected_months:
-        fig = go.Figure()
-        fig.add_annotation(
-            text="<b>No hay heatmap para los meses seleccionados</b>",
-            x=0.5, y=0.5,
-            xref="paper", yref="paper",
-            showarrow=False,
-            font=dict(size=18, color=COLOR_GRAY)
-        )
-        fig.update_layout(
-            title="Heatmap potencia hora × día del mes",
-            template="plotly_white",
-            height=420,
-            xaxis=dict(visible=False),
-            yaxis=dict(visible=False),
-        )
-        return fig
+    if not horas or not dias:
+        return _message_figure("Heatmap potencia hora × día", "No hay datos para los filtros seleccionados")
 
     z = []
     for hora in horas:
@@ -257,6 +237,15 @@ def chart_power_heatmap_filtered(power_analysis, selected_months=None):
         for dia in dias:
             fila.append(heat["valores"][hora][dia])
         z.append(fila)
+
+    month_name = _month_name_from_any(heat.get("month_name", heat.get("month_num", "")))
+    year_val = heat.get("year", "")
+
+    title = "Heatmap potencia hora × día"
+    if month_name:
+        title += f" — {month_name}"
+    if year_val:
+        title += f" {year_val}"
 
     fig = go.Figure(
         data=go.Heatmap(
@@ -269,7 +258,7 @@ def chart_power_heatmap_filtered(power_analysis, selected_months=None):
     )
 
     fig.update_layout(
-        title=f"Heatmap potencia hora × día — {month_name}",
+        title=title,
         template="plotly_white",
         height=500,
         xaxis_title="Día del mes",
@@ -280,11 +269,14 @@ def chart_power_heatmap_filtered(power_analysis, selected_months=None):
 
 
 # =============================================================================
-# 4. RANKING / CURVA DE DURACIÓN
+# 4. DISTRIBUCIÓN HORARIA ESTIMADA
 # =============================================================================
 
 def chart_power_ranking(power_analysis):
     ranking = power_analysis.power_ranking
+    if not ranking:
+        return _message_figure("Distribución de potencia horaria estimada", "No hay datos para los filtros seleccionados")
+
     x = list(range(1, len(ranking) + 1))
 
     fig = go.Figure()
@@ -294,8 +286,8 @@ def chart_power_ranking(power_analysis):
             x=x,
             y=ranking,
             mode="lines",
-            name="Curva de duración",
-            line=dict(color=COLOR_BLUE, shape="spline", smoothing=0.4),
+            name="Distribución horaria estimada",
+            line=dict(color=COLOR_BLUE, width=2),
         )
     )
 
@@ -319,13 +311,25 @@ def chart_power_ranking(power_analysis):
         )
     )
 
+    fig.add_annotation(
+        x=0.01,
+        y=1.10,
+        xref="paper",
+        yref="paper",
+        showarrow=False,
+        align="left",
+        text="Potencia horaria estimada a partir de la curva de consumo. No representa picos instantáneos oficiales.",
+        font=dict(size=11, color=COLOR_GRAY),
+    )
+
     fig.update_layout(
-        title="Curva de duración de potencia",
+        title="Distribución de potencia horaria estimada",
         template="plotly_white",
-        height=420,
+        height=440,
         xaxis_title="Horas ordenadas",
         yaxis_title="kW",
         legend_title_text="",
+        margin=dict(l=60, r=40, t=90, b=60),
     )
 
     return fig
@@ -365,7 +369,7 @@ def chart_power_profile(power_analysis):
     fig.add_annotation(
         x=0.5, y=0.72,
         xref="paper", yref="paper",
-        text="<b>Perfil de consumo</b>",
+        text="<b>Perfil de potencia</b>",
         showarrow=False,
         font=dict(size=16, color=COLOR_DARK)
     )
@@ -406,6 +410,9 @@ def chart_monthly_official_bars(power_analysis):
     max_by_month = power_analysis.max_by_month
     meses_raw = list(max_by_month.keys())
     meses = [_month_name_from_any(m) for m in meses_raw]
+
+    if not meses_raw:
+        return _message_figure("Picos oficiales mensuales", "No hay datos para los filtros seleccionados")
 
     fig = go.Figure()
 
@@ -463,6 +470,9 @@ def chart_monthly_official_table(power_analysis):
     max_by_month = power_analysis.max_by_month
     meses_raw = list(max_by_month.keys())
 
+    if not meses_raw:
+        return _message_figure("Tabla de picos oficiales mensuales", "No hay datos para los filtros seleccionados")
+
     rows = []
     for m in meses_raw:
         row = {"Mes": _month_name_from_any(m)}
@@ -510,11 +520,11 @@ def chart_monthly_official_table(power_analysis):
 # MAIN
 # =============================================================================
 
-def generate_power_charts(power_analysis, selected_months=None):
+def generate_power_charts(power_analysis):
     return {
         "kpis": chart_power_kpis(power_analysis),
-        "daily_max": chart_daily_max_filtered(power_analysis, selected_months=selected_months),
-        "heatmap": chart_power_heatmap_filtered(power_analysis, selected_months=selected_months),
+        "daily_max": chart_daily_max(power_analysis),
+        "heatmap": chart_power_heatmap(power_analysis),
         "ranking": chart_power_ranking(power_analysis),
         "profile": chart_power_profile(power_analysis),
         "monthly_official": chart_monthly_official_bars(power_analysis),

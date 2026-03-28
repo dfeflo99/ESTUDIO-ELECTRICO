@@ -1,345 +1,442 @@
 # =============================================================================
 # src/analysis/charts/power_charts.py
-# Graficos de potencia electrica con Plotly
-# Version: 1.1
+# Gráficos de análisis de potencia
+# Compatible con 2.0TD + 3.0TD
 # =============================================================================
 
+import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import numpy as np
-
-import sys
-sys.path.append('../..')
-from src.models.internal_data_model import PowerAnalysis
 
 
-COLORS = {
-    'primary':      '#2563EB',
-    'secondary':    '#3B82F6',
-    'light':        '#93C5FD',
-    'accent':       '#1D4ED8',
-    'danger':       '#EF4444',
-    'warning':      '#F59E0B',
-    'success':      '#10B981',
-    'punta':        '#1D4ED8',
-    'valle':        '#93C5FD',
-    'potmax':       '#EF4444',
-    'background':   '#F8FAFF',
-    'grid':         '#E2E8F0',
-    'text':         '#1E293B',
-    'text_light':   '#64748B',
-}
+# =============================================================================
+# CONFIG VISUAL
+# =============================================================================
 
-BASE_LAYOUT = dict(
-    font          = dict(family='Segoe UI, Arial, sans-serif', color='#1E293B'),
-    paper_bgcolor = 'white',
-    plot_bgcolor  = '#F8FAFF',
-    margin        = dict(l=40, r=40, t=60, b=40),
-    hoverlabel    = dict(bgcolor='white', font_size=13),
-)
-
-def _round2(val):
-    return round(val, 2)
+COLOR_RED = "#CC1F1F"
+COLOR_ORANGE = "#F59E0B"
+COLOR_BLUE = "#2563EB"
+COLOR_GREEN = "#16A34A"
+COLOR_GRAY = "#6B7280"
+COLOR_LIGHT = "#F3F4F6"
+COLOR_DARK = "#111827"
 
 
-def chart_power_kpis(power: PowerAnalysis) -> go.Figure:
-    fig = go.Figure()
-    kpis = [
-        ('Maximo Real',        power.max_power_kw,      ',.3f', ' kW'),
-        ('P99',                power.p99_power_kw,      ',.4f', ' kW'),
-        ('Factor de Carga',    power.load_factor,       ',.3f', ''),
-        ('Horas sobre umbral', power.hours_exceeds_2kw, ',d',   ' h'),
-        ('% sobre umbral',     power.pct_exceeds_2kw,   ',.2f', '%'),
+# =============================================================================
+# HELPERS
+# =============================================================================
+
+def _is_3_0(power_analysis) -> bool:
+    return getattr(power_analysis, "contract_type", "") == "3.0TD"
+
+
+def _periods_for_contract(power_analysis):
+    if _is_3_0(power_analysis):
+        return ["P1", "P2", "P3", "P4", "P5", "P6"]
+    return ["P1", "P3"]
+
+
+def _alias_period_2(power_analysis):
+    return "P6" if _is_3_0(power_analysis) else "P3"
+
+
+def _card_annotation(x0, x1, title, value, subtitle="", color=COLOR_BLUE, value_size=24):
+    anns = [
+        dict(
+            x=(x0 + x1) / 2,
+            y=0.74,
+            xref="paper",
+            yref="paper",
+            text=f"<b>{title}</b>",
+            showarrow=False,
+            font=dict(size=13, color=COLOR_DARK),
+            align="center",
+        ),
+        dict(
+            x=(x0 + x1) / 2,
+            y=0.47,
+            xref="paper",
+            yref="paper",
+            text=f"<span style='font-size:{value_size}px; color:{color}'><b>{value}</b></span>",
+            showarrow=False,
+            align="center",
+        ),
     ]
-    for i, (titulo, valor, fmt, sufijo) in enumerate(kpis):
-        fig.add_trace(go.Indicator(
-            mode   = "number",
-            value  = float(valor),
-            title  = dict(text=titulo, font=dict(size=13, color=COLORS['text_light'])),
-            number = dict(suffix=sufijo, font=dict(size=24, color=COLORS['primary']),
-                          valueformat=fmt),
-            domain = dict(x=[i/5, (i+1)/5], y=[0, 1])
-        ))
+    if subtitle:
+        anns.append(
+            dict(
+                x=(x0 + x1) / 2,
+                y=0.22,
+                xref="paper",
+                yref="paper",
+                text=subtitle,
+                showarrow=False,
+                font=dict(size=11, color=COLOR_GRAY),
+                align="center",
+            )
+        )
+    return anns
+
+
+# =============================================================================
+# 1. KPIs
+# =============================================================================
+
+def chart_power_kpis(power_analysis):
+    fig = go.Figure()
+
+    boxes = [
+        (0.00, 0.18),
+        (0.205, 0.385),
+        (0.41, 0.59),
+        (0.615, 0.795),
+        (0.82, 1.00),
+    ]
+
+    for x0, x1 in boxes:
+        fig.add_shape(
+            type="rect",
+            xref="paper",
+            yref="paper",
+            x0=x0,
+            x1=x1,
+            y0=0.02,
+            y1=0.98,
+            line=dict(color="#E5E7EB", width=1),
+            fillcolor="white",
+        )
+
+    annotations = []
+    annotations += _card_annotation(*boxes[0], "Máx. potencia", f"{power_analysis.max_power_kw} kW", color=COLOR_RED)
+    annotations += _card_annotation(*boxes[1], "P99", f"{power_analysis.p99_power_kw} kW", color=COLOR_ORANGE)
+    annotations += _card_annotation(*boxes[2], "Factor de carga", f"{power_analysis.load_factor}", color=COLOR_BLUE)
+    annotations += _card_annotation(*boxes[3], "Horas > umbral", f"{power_analysis.hours_exceeds_2kw}", color=COLOR_RED)
+    annotations += _card_annotation(*boxes[4], "% > umbral", f"{power_analysis.pct_exceeds_2kw}%", color=COLOR_ORANGE)
+
     fig.update_layout(
-        **BASE_LAYOUT,
-        height = 140,
-        title  = dict(
-            text  = f"Potencia contratada: P1={power.contracted_powers.p1} kW / "
-                    f"P2={power.contracted_powers.p2} kW  |  "
-                    f"Umbral analisis: {power.umbral_kw} kW",
-            font  = dict(size=12, color=COLORS['text_light']),
-            x     = 0.5
+        title="KPIs de potencia",
+        template="plotly_white",
+        height=250,
+        margin=dict(l=20, r=20, t=60, b=20),
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        annotations=annotations,
+    )
+
+    return fig
+
+
+# =============================================================================
+# 2. DAILY MAX
+# =============================================================================
+
+def chart_daily_max(power_analysis):
+    daily = power_analysis.daily_max_power
+
+    fechas = list(daily.keys())
+    valores = [daily[f]["max_kw"] for f in fechas]
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Scatter(
+            x=fechas,
+            y=valores,
+            mode="lines+markers",
+            name="Máx diario",
+            line=dict(color=COLOR_BLUE),
         )
     )
-    return fig
 
+    contracted = power_analysis.contracted_powers
+    periods = _periods_for_contract(power_analysis)
 
-def chart_daily_max_power(power: PowerAnalysis,
-                           meses_filtro: list = None) -> go.Figure:
-    datos = power.daily_max_power
-    if meses_filtro:
-        datos = {f: v for f, v in datos.items() if v['month_name'] in meses_filtro}
+    for p in periods:
+        kw = getattr(contracted, p.lower(), 0.0) or 0.0
+        if kw > 0:
+            fig.add_trace(
+                go.Scatter(
+                    x=fechas,
+                    y=[kw] * len(fechas),
+                    mode="lines",
+                    name=f"Contratada {p}",
+                    line=dict(dash="dash"),
+                )
+            )
 
-    fechas    = sorted(datos.keys())
-    potencias = [datos[f]['max_kw'] for f in fechas]
-    colores   = [
-        COLORS['warning'] if datos[f]['is_holiday']
-        else COLORS['light'] if datos[f]['is_weekend']
-        else COLORS['primary']
-        for f in fechas
-    ]
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=fechas, y=potencias, mode='lines+markers',
-        name='Potencia maxima diaria',
-        line=dict(color=COLORS['primary'], width=1.5),
-        marker=dict(size=5, color=colores,
-                    line=dict(color=COLORS['accent'], width=0.5)),
-        hovertemplate='<b>%{x}</b><br>Potencia max: %{y:.3f} kW<extra></extra>',
-    ))
-
-    if power.contracted_powers.p1 > 0:
-        fig.add_hline(y=power.contracted_powers.p1, line_dash='dash',
-                      line_color=COLORS['danger'], line_width=1.5,
-                      annotation_text=f'P1 contratada: {power.contracted_powers.p1} kW',
-                      annotation_position='top right',
-                      annotation_font=dict(color=COLORS['danger'], size=11))
-
-    if power.contracted_powers.p2 > 0 and power.contracted_powers.p2 != power.contracted_powers.p1:
-        fig.add_hline(y=power.contracted_powers.p2, line_dash='dot',
-                      line_color=COLORS['warning'], line_width=1.5,
-                      annotation_text=f'P2 contratada: {power.contracted_powers.p2} kW',
-                      annotation_position='bottom right',
-                      annotation_font=dict(color=COLORS['warning'], size=11))
-
-    titulo_filtro = f" — {', '.join(meses_filtro)}" if meses_filtro else " — Año completo"
     fig.update_layout(
-        **BASE_LAYOUT,
-        title=dict(text=f'Potencia Maxima Dia a Dia{titulo_filtro}', font=dict(size=16)),
-        xaxis=dict(title='Fecha', gridcolor=COLORS['grid'],
-                   rangeslider=dict(visible=True), type='date'),
-        yaxis=dict(title='kW (potencia media horaria)', gridcolor=COLORS['grid']),
+        title="Potencia máxima diaria",
+        template="plotly_white",
         height=420,
+        xaxis_title="Fecha",
+        yaxis_title="kW",
+        legend_title_text="",
     )
+
     return fig
 
 
-def chart_heatmap(power: PowerAnalysis,
-                  meses_filtro: list = None,
-                  records: list = None) -> go.Figure:
-    """
-    Sin filtro o varios meses -> hora x dia 1-31
-    Un solo mes               -> hora x fechas reales del mes
-    """
-    horas          = list(range(0, 24))
-    etiquetas_hora = [f"{h:02d}:00" for h in horas]
+# =============================================================================
+# 3. HEATMAP
+# =============================================================================
 
-    if meses_filtro and records:
-        from src.analysis.power_engine import calculate_heatmap_filtered
-        datos        = calculate_heatmap_filtered(records, meses_filtro)
-        eje_x        = datos.get('eje_x', list(range(1, 32)))
-        tipo         = datos.get('tipo', 'dia_mes')
-        valores_dict = datos.get('valores', {})
-    else:
-        heatmap      = power.hourly_power_heatmap
-        eje_x        = list(range(1, 32))
-        tipo         = 'dia_mes'
-        valores_dict = heatmap.get('valores', {})
+def chart_power_heatmap(power_analysis):
+    heat = power_analysis.hourly_power_heatmap
+    horas = heat["horas"]
+    dias = heat["dias"]
 
-    # Construir matriz Z
     z = []
     for hora in horas:
         fila = []
-        for x in eje_x:
-            val = valores_dict.get(hora, {}).get(x, None)
-            fila.append(val)
+        for dia in dias:
+            fila.append(heat["valores"][hora][dia])
         z.append(fila)
 
-    # Etiquetas eje X
-    if tipo == 'fecha_real':
-        etiquetas_x = [x[8:] for x in eje_x]  # solo DD de YYYY-MM-DD
-        titulo_x    = 'Dia del mes'
-    else:
-        etiquetas_x = eje_x
-        titulo_x    = 'Dia del mes'
-
-    # Titulo
-    if meses_filtro and len(meses_filtro) == 1:
-        titulo_filtro = f" — {meses_filtro[0].capitalize()} (fechas reales)"
-    elif meses_filtro:
-        titulo_filtro = f" — {', '.join(meses_filtro)}"
-    else:
-        titulo_filtro = " — Año completo"
-
-    fig = go.Figure(go.Heatmap(
-        z             = z,
-        x             = etiquetas_x,
-        y             = etiquetas_hora,
-        colorscale    = [
-            [0.0, '#EFF6FF'],
-            [0.3, '#93C5FD'],
-            [0.6, '#3B82F6'],
-            [0.8, '#F97316'],
-            [1.0, '#EF4444'],
-        ],
-        colorbar      = dict(title='kW', titleside='right', thickness=15),
-        hovertemplate = '<b>Hora %{y} — Dia %{x}</b><br>Potencia media: %{z:.3f} kW<extra></extra>',
-        zsmooth       = False,
-    ))
-
-    fig.update_layout(
-        **BASE_LAYOUT,
-        title  = dict(text=f'Mapa de Calor: Potencia por Hora y Dia{titulo_filtro}',
-                      font=dict(size=16)),
-        xaxis  = dict(title=titulo_x, gridcolor=COLORS['grid']),
-        yaxis  = dict(title='Hora del dia', autorange='reversed',
-                      gridcolor=COLORS['grid']),
-        height = 550,
-    )
-    return fig
-
-
-def chart_power_ranking(power: PowerAnalysis) -> go.Figure:
-    ranking    = power.power_ranking
-    n          = len(ranking)
-    posiciones = list(range(1, n + 1))
-    p99_idx    = int(n * 0.01)
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=posiciones, y=ranking, mode='lines',
-        name='Potencia',
-        line=dict(color=COLORS['primary'], width=2),
-        fill='tozeroy', fillcolor='rgba(37, 99, 235, 0.08)',
-        hovertemplate='Ranking %{x}<br>Potencia: %{y:.3f} kW<extra></extra>',
-    ))
-    fig.add_vline(x=p99_idx, line_dash='dash', line_color=COLORS['danger'],
-                  annotation_text=f'P99: {power.p99_power_kw:.3f} kW',
-                  annotation_position='top right',
-                  annotation_font=dict(color=COLORS['danger'], size=11))
-    fig.add_hline(y=power.umbral_kw, line_dash='dot', line_color=COLORS['warning'],
-                  annotation_text=f'Umbral: {power.umbral_kw} kW ({power.hours_exceeds_2kw}h)',
-                  annotation_position='top left',
-                  annotation_font=dict(color=COLORS['warning'], size=11))
-    fig.update_layout(
-        **BASE_LAYOUT,
-        title=dict(text='Curva de Ranking de Potencia', font=dict(size=16)),
-        xaxis=dict(title='Ranking (horas de mayor a menor potencia)',
-                   gridcolor=COLORS['grid']),
-        yaxis=dict(title='kW (potencia media horaria)', gridcolor=COLORS['grid']),
-        height=380,
-    )
-    return fig
-
-
-def chart_profile_interpretation(power: PowerAnalysis) -> go.Figure:
-    color_map = {
-        'estable':                ('#10B981', '#ECFDF5'),
-        'moderadamente variable': ('#F59E0B', '#FFFBEB'),
-        'muy variable':           ('#EF4444', '#FEF2F2'),
-    }
-    tipo        = getattr(power, 'perfil_tipo', 'estable')
-    descripcion = getattr(power, 'perfil_descripcion', '')
-    color_text, color_bg = color_map.get(tipo, (COLORS['primary'], COLORS['background']))
-
-    fig = go.Figure()
-    fig.add_annotation(
-        text      = f"<b>Perfil: {tipo.upper()}</b><br><br>{descripcion}",
-        xref='paper', yref='paper', x=0.5, y=0.6,
-        showarrow = False,
-        font      = dict(size=13, color=color_text,
-                         family='Segoe UI, Arial, sans-serif'),
-        align     = 'center',
-        bgcolor   = color_bg,
-        bordercolor = color_text,
-        borderwidth = 2,
-        borderpad   = 16,
-    )
-    for i, obs in enumerate(power.observations):
-        fig.add_annotation(
-            text=f"• {obs}", xref='paper', yref='paper',
-            x=0.5, y=0.15 - (i * 0.12),
-            showarrow=False,
-            font=dict(size=11, color=COLORS['text'],
-                      family='Segoe UI, Arial, sans-serif'),
-            align='left',
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z,
+            x=dias,
+            y=horas,
+            colorscale="YlOrRd",
+            colorbar_title="kW"
         )
+    )
+
     fig.update_layout(
-        **BASE_LAYOUT,
-        title=dict(text='Interpretacion del Perfil de Potencia', font=dict(size=16)),
-        height=300,
+        title="Heatmap potencia hora × día del mes",
+        template="plotly_white",
+        height=500,
+        xaxis_title="Día del mes",
+        yaxis_title="Hora",
+    )
+
+    return fig
+
+
+# =============================================================================
+# 4. RANKING / CURVA DE DURACIÓN
+# =============================================================================
+
+def chart_power_ranking(power_analysis):
+    ranking = power_analysis.power_ranking
+    x = list(range(1, len(ranking) + 1))
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=ranking,
+            mode="lines",
+            name="Curva de duración",
+            line=dict(color=COLOR_BLUE),
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[1, len(ranking)],
+            y=[power_analysis.p99_power_kw, power_analysis.p99_power_kw],
+            mode="lines",
+            name="P99",
+            line=dict(color=COLOR_ORANGE, dash="dash"),
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[1, len(ranking)],
+            y=[power_analysis.umbral_kw, power_analysis.umbral_kw],
+            mode="lines",
+            name="Umbral",
+            line=dict(color=COLOR_RED, dash="dot"),
+        )
+    )
+
+    fig.update_layout(
+        title="Curva de duración de potencia",
+        template="plotly_white",
+        height=420,
+        xaxis_title="Horas ordenadas",
+        yaxis_title="kW",
+        legend_title_text="",
+    )
+
+    return fig
+
+
+# =============================================================================
+# 5. PROFILE
+# =============================================================================
+
+def chart_power_profile(power_analysis):
+    perfil = getattr(power_analysis, "perfil_tipo", "sin clasificar")
+    descripcion = getattr(power_analysis, "perfil_descripcion", "")
+
+    color = COLOR_BLUE
+    if "estable" in perfil:
+        color = COLOR_GREEN
+    elif "moderadamente" in perfil:
+        color = COLOR_ORANGE
+    elif "muy variable" in perfil:
+        color = COLOR_RED
+
+    fig = go.Figure()
+
+    fig.add_shape(
+        type="rect",
+        xref="paper",
+        yref="paper",
+        x0=0.05,
+        x1=0.95,
+        y0=0.1,
+        y1=0.9,
+        line=dict(color="#E5E7EB", width=1),
+        fillcolor="white",
+    )
+
+    fig.add_annotation(
+        x=0.5, y=0.72,
+        xref="paper", yref="paper",
+        text="<b>Perfil de consumo</b>",
+        showarrow=False,
+        font=dict(size=16, color=COLOR_DARK)
+    )
+
+    fig.add_annotation(
+        x=0.5, y=0.5,
+        xref="paper", yref="paper",
+        text=f"<span style='font-size:30px; color:{color}'><b>{perfil}</b></span>",
+        showarrow=False,
+    )
+
+    fig.add_annotation(
+        x=0.5, y=0.25,
+        xref="paper", yref="paper",
+        text=descripcion,
+        showarrow=False,
+        font=dict(size=12, color=COLOR_GRAY),
+        align="center"
+    )
+
+    fig.update_layout(
+        title="Perfil de potencia",
+        template="plotly_white",
+        height=280,
         xaxis=dict(visible=False),
         yaxis=dict(visible=False),
+        margin=dict(l=20, r=20, t=60, b=20),
     )
+
     return fig
 
 
-def chart_monthly_official_peaks(power: PowerAnalysis) -> go.Figure:
-    max_by_month = getattr(power, 'max_by_month', {})
+# =============================================================================
+# 6. MONTHLY OFFICIAL
+# =============================================================================
 
-    if not max_by_month:
-        fig = go.Figure()
-        fig.add_annotation(text="No hay datos del CSV oficial",
-                           xref='paper', yref='paper', x=0.5, y=0.5,
-                           showarrow=False,
-                           font=dict(size=14, color=COLORS['text_light']))
-        fig.update_layout(**BASE_LAYOUT, height=300)
-        return fig
-
-    meses   = list(max_by_month.keys())
-    punta   = [max_by_month[m].get('Punta',   0) for m in meses]
-    valle   = [max_by_month[m].get('Valle',   0) for m in meses]
-    pot_max = [max_by_month[m].get('Pot.Max', 0) for m in meses]
+def chart_monthly_official(power_analysis):
+    max_by_month = power_analysis.max_by_month
+    meses = list(max_by_month.keys())
 
     fig = go.Figure()
-    fig.add_trace(go.Bar(name='Punta', x=meses, y=punta,
-                         marker_color=COLORS['punta'],
-                         hovertemplate='<b>%{x} — Punta</b><br>%{y:.3f} kW<extra></extra>'))
-    fig.add_trace(go.Bar(name='Valle', x=meses, y=valle,
-                         marker_color=COLORS['valle'],
-                         hovertemplate='<b>%{x} — Valle</b><br>%{y:.3f} kW<extra></extra>'))
-    fig.add_trace(go.Bar(name='Pot.Max', x=meses, y=pot_max,
-                         marker_color=COLORS['potmax'],
-                         hovertemplate='<b>%{x} — Pot.Max</b><br>%{y:.3f} kW<extra></extra>'))
 
-    fig.add_hline(y=power.recommended_p1_kw, line_dash='dash',
-                  line_color=COLORS['success'],
-                  annotation_text=f'Recomendada P1: {power.recommended_p1_kw} kW',
-                  annotation_position='top left',
-                  annotation_font=dict(color=COLORS['success'], size=11))
+    if _is_3_0(power_analysis):
+        for p in ["P1", "P2", "P3", "P4", "P5", "P6"]:
+            fig.add_trace(
+                go.Bar(
+                    x=meses,
+                    y=[max_by_month[m].get(p, 0.0) for m in meses],
+                    name=f"Pico {p}",
+                )
+            )
+    else:
+        fig.add_trace(
+            go.Bar(
+                x=meses,
+                y=[max_by_month[m].get("P1", 0.0) for m in meses],
+                name="Pico P1",
+                marker_color=COLOR_RED,
+            )
+        )
+        fig.add_trace(
+            go.Bar(
+                x=meses,
+                y=[max_by_month[m].get("P3", 0.0) for m in meses],
+                name="Pico P3",
+                marker_color=COLOR_BLUE,
+            )
+        )
 
-    if power.contracted_powers.p1 > 0:
-        fig.add_hline(y=power.contracted_powers.p1, line_dash='dot',
-                      line_color=COLORS['danger'],
-                      annotation_text=f'Contratada P1: {power.contracted_powers.p1} kW',
-                      annotation_position='top right',
-                      annotation_font=dict(color=COLORS['danger'], size=11))
+    fig.add_trace(
+        go.Bar(
+            x=meses,
+            y=[max_by_month[m].get("Pot.Max", 0.0) for m in meses],
+            name="Pot.Max",
+            marker_color=COLOR_ORANGE,
+            opacity=0.45,
+        )
+    )
+
+    contracted = power_analysis.contracted_powers
+    for p in _periods_for_contract(power_analysis):
+        kw = getattr(contracted, p.lower(), 0.0) or 0.0
+        if kw > 0:
+            fig.add_trace(
+                go.Scatter(
+                    x=meses,
+                    y=[kw] * len(meses),
+                    mode="lines",
+                    name=f"Contratada {p}",
+                    line=dict(dash="dash"),
+                )
+            )
+
+    # Líneas recomendadas visibles
+    recs = {
+        "P1": power_analysis.recommended_p1_kw,
+        "P2": power_analysis.recommended_p2_kw,
+        "P3": power_analysis.recommended_p3_kw,
+        "P4": power_analysis.recommended_p4_kw,
+        "P5": power_analysis.recommended_p5_kw,
+        "P6": power_analysis.recommended_p6_kw,
+    }
+    for p in _periods_for_contract(power_analysis):
+        kw = recs.get(p, 0.0)
+        if kw > 0:
+            fig.add_trace(
+                go.Scatter(
+                    x=meses,
+                    y=[kw] * len(meses),
+                    mode="lines",
+                    name=f"Recomendada {p}",
+                    line=dict(dash="dot"),
+                )
+            )
 
     fig.update_layout(
-        **BASE_LAYOUT,
-        title=dict(text='Pico Oficial Mensual por Periodo (CSV Distribuidora)',
-                   font=dict(size=16)),
-        barmode='group',
-        xaxis=dict(title='Mes', gridcolor=COLORS['grid']),
-        yaxis=dict(title='kW (pico real)', gridcolor=COLORS['grid']),
-        height=420,
-        legend=dict(orientation='h', y=-0.2),
+        title="Picos oficiales mensuales",
+        template="plotly_white",
+        height=520,
+        barmode="group",
+        xaxis_title="Mes",
+        yaxis_title="kW",
+        legend_title_text="",
     )
+
     return fig
 
 
-def generate_power_charts(power: PowerAnalysis,
-                           meses_filtro: list = None,
-                           records: list = None) -> dict:
-    print("Generando graficos de potencia...")
-    graficos = {
-        'kpis':             chart_power_kpis(power),
-        'daily_max':        chart_daily_max_power(power, meses_filtro),
-        'heatmap':          chart_heatmap(power, meses_filtro, records),
-        'ranking':          chart_power_ranking(power),
-        'profile':          chart_profile_interpretation(power),
-        'monthly_official': chart_monthly_official_peaks(power),
+# =============================================================================
+# MAIN
+# =============================================================================
+
+def generate_power_charts(power_analysis):
+    return {
+        "kpis": chart_power_kpis(power_analysis),
+        "daily_max": chart_daily_max(power_analysis),
+        "heatmap": chart_power_heatmap(power_analysis),
+        "ranking": chart_power_ranking(power_analysis),
+        "profile": chart_power_profile(power_analysis),
+        "monthly_official": chart_monthly_official(power_analysis),
     }
-    print(f"  {len(graficos)} graficos generados correctamente.")
-    return graficos

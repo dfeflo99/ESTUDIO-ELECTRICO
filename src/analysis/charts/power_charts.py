@@ -6,7 +6,6 @@
 
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 
 # =============================================================================
@@ -18,8 +17,14 @@ COLOR_ORANGE = "#F59E0B"
 COLOR_BLUE = "#2563EB"
 COLOR_GREEN = "#16A34A"
 COLOR_GRAY = "#6B7280"
-COLOR_LIGHT = "#F3F4F6"
 COLOR_DARK = "#111827"
+
+
+MONTH_NUM_TO_NAME = {
+    1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+    5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+    9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+}
 
 
 # =============================================================================
@@ -36,46 +41,74 @@ def _periods_for_contract(power_analysis):
     return ["P1", "P3"]
 
 
-def _alias_period_2(power_analysis):
-    return "P6" if _is_3_0(power_analysis) else "P3"
+def _month_name_from_any(x):
+    if isinstance(x, int):
+        return MONTH_NUM_TO_NAME.get(x, str(x))
+
+    text = str(x).strip().lower()
+
+    mapping = {
+        "ene": "Enero", "enero": "Enero",
+        "feb": "Febrero", "febrero": "Febrero",
+        "mar": "Marzo", "marzo": "Marzo",
+        "abr": "Abril", "abril": "Abril",
+        "may": "Mayo",
+        "jun": "Junio", "junio": "Junio",
+        "jul": "Julio", "julio": "Julio",
+        "ago": "Agosto", "agosto": "Agosto",
+        "sep": "Septiembre", "septiembre": "Septiembre",
+        "oct": "Octubre", "octubre": "Octubre",
+        "nov": "Noviembre", "noviembre": "Noviembre",
+        "dic": "Diciembre", "diciembre": "Diciembre",
+        "01": "Enero", "02": "Febrero", "03": "Marzo", "04": "Abril",
+        "05": "Mayo", "06": "Junio", "07": "Julio", "08": "Agosto",
+        "09": "Septiembre", "10": "Octubre", "11": "Noviembre", "12": "Diciembre",
+    }
+
+    if text[:3] in mapping:
+        return mapping[text[:3]]
+    if text[:2] in mapping:
+        return mapping[text[:2]]
+
+    return text.capitalize()
 
 
-def _card_annotation(x0, x1, title, value, subtitle="", color=COLOR_BLUE, value_size=24):
-    anns = [
+def _card_annotation(x0, x1, title, value, subtitle="", color=COLOR_BLUE, value_size=22):
+    return [
         dict(
             x=(x0 + x1) / 2,
-            y=0.74,
+            y=0.76,
             xref="paper",
             yref="paper",
             text=f"<b>{title}</b>",
             showarrow=False,
             font=dict(size=13, color=COLOR_DARK),
             align="center",
+            xanchor="center",
         ),
         dict(
             x=(x0 + x1) / 2,
-            y=0.47,
+            y=0.46,
             xref="paper",
             yref="paper",
             text=f"<span style='font-size:{value_size}px; color:{color}'><b>{value}</b></span>",
             showarrow=False,
             align="center",
+            xanchor="center",
         ),
-    ]
-    if subtitle:
-        anns.append(
-            dict(
-                x=(x0 + x1) / 2,
-                y=0.22,
-                xref="paper",
-                yref="paper",
-                text=subtitle,
-                showarrow=False,
-                font=dict(size=11, color=COLOR_GRAY),
-                align="center",
-            )
-        )
-    return anns
+    ] + (
+        [dict(
+            x=(x0 + x1) / 2,
+            y=0.22,
+            xref="paper",
+            yref="paper",
+            text=subtitle,
+            showarrow=False,
+            font=dict(size=11, color=COLOR_GRAY),
+            align="center",
+            xanchor="center",
+        )] if subtitle else []
+    )
 
 
 # =============================================================================
@@ -107,11 +140,11 @@ def chart_power_kpis(power_analysis):
         )
 
     annotations = []
-    annotations += _card_annotation(*boxes[0], "Máx. potencia", f"{power_analysis.max_power_kw} kW", color=COLOR_RED)
-    annotations += _card_annotation(*boxes[1], "P99", f"{power_analysis.p99_power_kw} kW", color=COLOR_ORANGE)
-    annotations += _card_annotation(*boxes[2], "Factor de carga", f"{power_analysis.load_factor}", color=COLOR_BLUE)
-    annotations += _card_annotation(*boxes[3], "Horas > umbral", f"{power_analysis.hours_exceeds_2kw}", color=COLOR_RED)
-    annotations += _card_annotation(*boxes[4], "% > umbral", f"{power_analysis.pct_exceeds_2kw}%", color=COLOR_ORANGE)
+    annotations += _card_annotation(*boxes[0], "Máx. potencia", f"{power_analysis.max_power_kw} kW", color=COLOR_RED, value_size=20)
+    annotations += _card_annotation(*boxes[1], "P99", f"{power_analysis.p99_power_kw} kW", color=COLOR_ORANGE, value_size=20)
+    annotations += _card_annotation(*boxes[2], "Factor de carga", f"{power_analysis.load_factor}", color=COLOR_BLUE, value_size=20)
+    annotations += _card_annotation(*boxes[3], "Horas > umbral", f"{power_analysis.hours_exceeds_2kw}", color=COLOR_RED, value_size=20)
+    annotations += _card_annotation(*boxes[4], "% > umbral", f"{power_analysis.pct_exceeds_2kw}%", color=COLOR_ORANGE, value_size=20)
 
     fig.update_layout(
         title="KPIs de potencia",
@@ -130,18 +163,31 @@ def chart_power_kpis(power_analysis):
 # 2. DAILY MAX
 # =============================================================================
 
-def chart_daily_max(power_analysis):
+def chart_daily_max_filtered(power_analysis, selected_months=None):
     daily = power_analysis.daily_max_power
 
-    fechas = list(daily.keys())
-    valores = [daily[f]["max_kw"] for f in fechas]
+    rows = []
+    for fecha, info in daily.items():
+        rows.append({
+            "fecha": fecha,
+            "max_kw": info["max_kw"],
+            "month_num": info.get("month_num"),
+            "month_name": _month_name_from_any(info.get("month_name", info.get("month_num"))),
+        })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return go.Figure()
+
+    if selected_months:
+        df = df[df["month_name"].isin(selected_months)]
 
     fig = go.Figure()
 
     fig.add_trace(
         go.Scatter(
-            x=fechas,
-            y=valores,
+            x=df["fecha"],
+            y=df["max_kw"],
             mode="lines+markers",
             name="Máx diario",
             line=dict(color=COLOR_BLUE),
@@ -156,8 +202,8 @@ def chart_daily_max(power_analysis):
         if kw > 0:
             fig.add_trace(
                 go.Scatter(
-                    x=fechas,
-                    y=[kw] * len(fechas),
+                    x=df["fecha"],
+                    y=[kw] * len(df),
                     mode="lines",
                     name=f"Contratada {p}",
                     line=dict(dash="dash"),
@@ -180,10 +226,30 @@ def chart_daily_max(power_analysis):
 # 3. HEATMAP
 # =============================================================================
 
-def chart_power_heatmap(power_analysis):
+def chart_power_heatmap_filtered(power_analysis, selected_months=None):
     heat = power_analysis.hourly_power_heatmap
     horas = heat["horas"]
     dias = heat["dias"]
+
+    month_name = _month_name_from_any(heat.get("month_name", heat.get("month_num")))
+
+    if selected_months and month_name not in selected_months:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="<b>No hay heatmap para los meses seleccionados</b>",
+            x=0.5, y=0.5,
+            xref="paper", yref="paper",
+            showarrow=False,
+            font=dict(size=18, color=COLOR_GRAY)
+        )
+        fig.update_layout(
+            title="Heatmap potencia hora × día del mes",
+            template="plotly_white",
+            height=420,
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+        )
+        return fig
 
     z = []
     for hora in horas:
@@ -203,7 +269,7 @@ def chart_power_heatmap(power_analysis):
     )
 
     fig.update_layout(
-        title="Heatmap potencia hora × día del mes",
+        title=f"Heatmap potencia hora × día — {month_name}",
         template="plotly_white",
         height=500,
         xaxis_title="Día del mes",
@@ -229,7 +295,7 @@ def chart_power_ranking(power_analysis):
             y=ranking,
             mode="lines",
             name="Curva de duración",
-            line=dict(color=COLOR_BLUE),
+            line=dict(color=COLOR_BLUE, shape="spline", smoothing=0.4),
         )
     )
 
@@ -274,11 +340,12 @@ def chart_power_profile(power_analysis):
     descripcion = getattr(power_analysis, "perfil_descripcion", "")
 
     color = COLOR_BLUE
-    if "estable" in perfil:
+    perfil_lower = perfil.lower()
+    if "estable" in perfil_lower and "muy" not in perfil_lower:
         color = COLOR_GREEN
-    elif "moderadamente" in perfil:
+    elif "moderado" in perfil_lower:
         color = COLOR_ORANGE
-    elif "muy variable" in perfil:
+    elif "muy variable" in perfil_lower:
         color = COLOR_RED
 
     fig = go.Figure()
@@ -335,9 +402,10 @@ def chart_power_profile(power_analysis):
 # 6. MONTHLY OFFICIAL
 # =============================================================================
 
-def chart_monthly_official(power_analysis):
+def chart_monthly_official_bars(power_analysis):
     max_by_month = power_analysis.max_by_month
-    meses = list(max_by_month.keys())
+    meses_raw = list(max_by_month.keys())
+    meses = [_month_name_from_any(m) for m in meses_raw]
 
     fig = go.Figure()
 
@@ -346,7 +414,7 @@ def chart_monthly_official(power_analysis):
             fig.add_trace(
                 go.Bar(
                     x=meses,
-                    y=[max_by_month[m].get(p, 0.0) for m in meses],
+                    y=[max_by_month[m].get(p, 0.0) for m in meses_raw],
                     name=f"Pico {p}",
                 )
             )
@@ -354,7 +422,7 @@ def chart_monthly_official(power_analysis):
         fig.add_trace(
             go.Bar(
                 x=meses,
-                y=[max_by_month[m].get("P1", 0.0) for m in meses],
+                y=[max_by_month[m].get("P1", 0.0) for m in meses_raw],
                 name="Pico P1",
                 marker_color=COLOR_RED,
             )
@@ -362,7 +430,7 @@ def chart_monthly_official(power_analysis):
         fig.add_trace(
             go.Bar(
                 x=meses,
-                y=[max_by_month[m].get("P3", 0.0) for m in meses],
+                y=[max_by_month[m].get("P3", 0.0) for m in meses_raw],
                 name="Pico P3",
                 marker_color=COLOR_BLUE,
             )
@@ -371,48 +439,12 @@ def chart_monthly_official(power_analysis):
     fig.add_trace(
         go.Bar(
             x=meses,
-            y=[max_by_month[m].get("Pot.Max", 0.0) for m in meses],
+            y=[max_by_month[m].get("Pot.Max", 0.0) for m in meses_raw],
             name="Pot.Max",
             marker_color=COLOR_ORANGE,
             opacity=0.45,
         )
     )
-
-    contracted = power_analysis.contracted_powers
-    for p in _periods_for_contract(power_analysis):
-        kw = getattr(contracted, p.lower(), 0.0) or 0.0
-        if kw > 0:
-            fig.add_trace(
-                go.Scatter(
-                    x=meses,
-                    y=[kw] * len(meses),
-                    mode="lines",
-                    name=f"Contratada {p}",
-                    line=dict(dash="dash"),
-                )
-            )
-
-    # Líneas recomendadas visibles
-    recs = {
-        "P1": power_analysis.recommended_p1_kw,
-        "P2": power_analysis.recommended_p2_kw,
-        "P3": power_analysis.recommended_p3_kw,
-        "P4": power_analysis.recommended_p4_kw,
-        "P5": power_analysis.recommended_p5_kw,
-        "P6": power_analysis.recommended_p6_kw,
-    }
-    for p in _periods_for_contract(power_analysis):
-        kw = recs.get(p, 0.0)
-        if kw > 0:
-            fig.add_trace(
-                go.Scatter(
-                    x=meses,
-                    y=[kw] * len(meses),
-                    mode="lines",
-                    name=f"Recomendada {p}",
-                    line=dict(dash="dot"),
-                )
-            )
 
     fig.update_layout(
         title="Picos oficiales mensuales",
@@ -427,16 +459,64 @@ def chart_monthly_official(power_analysis):
     return fig
 
 
+def chart_monthly_official_table(power_analysis):
+    max_by_month = power_analysis.max_by_month
+    meses_raw = list(max_by_month.keys())
+
+    rows = []
+    for m in meses_raw:
+        row = {"Mes": _month_name_from_any(m)}
+        values = max_by_month[m]
+        if _is_3_0(power_analysis):
+            for p in ["P1", "P2", "P3", "P4", "P5", "P6"]:
+                row[p] = values.get(p, 0.0)
+        else:
+            row["P1"] = values.get("P1", 0.0)
+            row["P3"] = values.get("P3", 0.0)
+        row["Pot.Max"] = values.get("Pot.Max", 0.0)
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+
+    fig = go.Figure(
+        data=[
+            go.Table(
+                header=dict(
+                    values=list(df.columns),
+                    fill_color=COLOR_BLUE,
+                    font=dict(color="white", size=12),
+                    align="center"
+                ),
+                cells=dict(
+                    values=[df[col] for col in df.columns],
+                    fill_color="white",
+                    align="center",
+                    font=dict(size=11),
+                    height=28
+                )
+            )
+        ]
+    )
+
+    fig.update_layout(
+        title="Tabla de picos oficiales mensuales",
+        height=max(320, 90 + len(df) * 28)
+    )
+
+    return fig
+
+
 # =============================================================================
 # MAIN
 # =============================================================================
 
-def generate_power_charts(power_analysis):
+def generate_power_charts(power_analysis, selected_months=None):
     return {
         "kpis": chart_power_kpis(power_analysis),
-        "daily_max": chart_daily_max(power_analysis),
-        "heatmap": chart_power_heatmap(power_analysis),
+        "daily_max": chart_daily_max_filtered(power_analysis, selected_months=selected_months),
+        "heatmap": chart_power_heatmap_filtered(power_analysis, selected_months=selected_months),
         "ranking": chart_power_ranking(power_analysis),
         "profile": chart_power_profile(power_analysis),
-        "monthly_official": chart_monthly_official(power_analysis),
+        "monthly_official": chart_monthly_official_bars(power_analysis),
+        "monthly_official_table": chart_monthly_official_table(power_analysis),
     }

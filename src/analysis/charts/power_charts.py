@@ -185,10 +185,16 @@ def chart_daily_max(power_analysis):
 
     rows = []
     for fecha, info in daily.items():
-        rows.append({
+        row = {
             "fecha": fecha,
-            "max_kw": info["max_kw"],
-        })
+            "max_kw": info.get("max_kw", 0.0),
+        }
+
+        for p in ["P1", "P2", "P3", "P4", "P5", "P6"]:
+            if p in info:
+                row[p] = info.get(p, 0.0)
+
+        rows.append(row)
 
     df = pd.DataFrame(rows)
     if df.empty:
@@ -197,15 +203,30 @@ def chart_daily_max(power_analysis):
     df = df.sort_values("fecha")
 
     fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=df["fecha"],
-            y=df["max_kw"],
-            mode="lines+markers",
-            name="Máx diario",
-            line=dict(color=COLOR_BLUE),
+
+    if _is_3_0(power_analysis):
+        periodos = [p for p in ["P1", "P2", "P3", "P4", "P5", "P6"] if p in df.columns]
+        for p in periodos:
+            fig.add_trace(
+                go.Scatter(
+                    x=df["fecha"],
+                    y=df[p],
+                    mode="lines+markers",
+                    name=p,
+                    hovertemplate=f"Fecha: %{{x|%d/%m/%Y}}<br>Periodo: {p}<br>kW: %{{y}}<extra></extra>",
+                )
+            )
+    else:
+        fig.add_trace(
+            go.Scatter(
+                x=df["fecha"],
+                y=df["max_kw"],
+                mode="lines+markers",
+                name="Máx diario",
+                line=dict(color=COLOR_BLUE),
+                hovertemplate="Fecha: %{x|%d/%m/%Y}<br>kW: %{y}<extra></extra>",
+            )
         )
-    )
 
     fig.update_layout(
         title="Potencia máxima diaria",
@@ -232,14 +253,21 @@ def chart_power_heatmap(power_analysis):
         return _message_figure("Heatmap potencia hora × día", "No hay datos para los filtros seleccionados")
 
     z = []
-    for hora in horas:
-        fila = []
-        for dia in dias:
-            fila.append(heat["valores"][hora][dia])
-        z.append(fila)
+    custom = []
 
     month_name = _month_name_from_any(heat.get("month_name", heat.get("month_num", "")))
     year_val = heat.get("year", "")
+
+    for hora in horas:
+        fila_z = []
+        fila_custom = []
+        for dia in dias:
+            valor = heat["valores"][hora][dia]
+            fila_z.append(valor)
+            fecha_txt = f"{dia:02d}/{heat.get('month_num', 0):02d}/{year_val}" if heat.get("month_num") else f"{dia:02d}"
+            fila_custom.append([fecha_txt, hora, valor])
+        z.append(fila_z)
+        custom.append(fila_custom)
 
     title = "Heatmap potencia hora × día"
     if month_name:
@@ -252,8 +280,10 @@ def chart_power_heatmap(power_analysis):
             z=z,
             x=dias,
             y=horas,
+            customdata=custom,
             colorscale="YlOrRd",
-            colorbar_title="kW"
+            colorbar_title="kW",
+            hovertemplate="Fecha: %{customdata[0]}<br>Hora: %{customdata[1]}:00<br>kW: %{customdata[2]}<extra></extra>",
         )
     )
 
@@ -288,6 +318,7 @@ def chart_power_ranking(power_analysis):
             mode="lines",
             name="Distribución horaria estimada",
             line=dict(color=COLOR_BLUE, width=2),
+            hovertemplate="Posición: %{x}<br>kW: %{y}<extra></extra>",
         )
     )
 
@@ -423,6 +454,7 @@ def chart_monthly_official_bars(power_analysis):
                     x=meses,
                     y=[max_by_month[m].get(p, 0.0) for m in meses_raw],
                     name=f"Pico {p}",
+                    hovertemplate=f"Mes: %{{x}}<br>Periodo: {p}<br>kW: %{{y}}<extra></extra>",
                 )
             )
     else:
@@ -432,6 +464,7 @@ def chart_monthly_official_bars(power_analysis):
                 y=[max_by_month[m].get("P1", 0.0) for m in meses_raw],
                 name="Pico P1",
                 marker_color=COLOR_RED,
+                hovertemplate="Mes: %{x}<br>Periodo: P1<br>kW: %{y}<extra></extra>",
             )
         )
         fig.add_trace(
@@ -440,6 +473,7 @@ def chart_monthly_official_bars(power_analysis):
                 y=[max_by_month[m].get("P3", 0.0) for m in meses_raw],
                 name="Pico P3",
                 marker_color=COLOR_BLUE,
+                hovertemplate="Mes: %{x}<br>Periodo: P3<br>kW: %{y}<extra></extra>",
             )
         )
 
@@ -450,6 +484,7 @@ def chart_monthly_official_bars(power_analysis):
             name="Pot.Max",
             marker_color=COLOR_ORANGE,
             opacity=0.45,
+            hovertemplate="Mes: %{x}<br>Pot.Max<br>kW: %{y}<extra></extra>",
         )
     )
 

@@ -143,7 +143,6 @@ def _initial_power_values(
             "P6": pick("p6", contracted_p6, 5.0),
         }
 
-    # 2.0TD en tu proyecto: P1 y P3
     return {
         "P1": pick("p1", contracted_p1, 2.3),
         "P3": pick("p3", contracted_p3 if contracted_p3 is not None else contracted_p2, 2.3),
@@ -162,7 +161,7 @@ def _build_power_controls(analysis: ElectricityAnalysis, init_vals: dict):
                         type="number",
                         value=init_vals["P1"],
                         step=0.1,
-                        style={"width": "100%", "padding": "10px"}
+                        style={"width": "100%", "padding": "10px"},
                     ),
                 ]),
                 html.Div([
@@ -172,7 +171,7 @@ def _build_power_controls(analysis: ElectricityAnalysis, init_vals: dict):
                         type="number",
                         value=init_vals["P2"],
                         step=0.1,
-                        style={"width": "100%", "padding": "10px"}
+                        style={"width": "100%", "padding": "10px"},
                     ),
                 ]),
                 html.Div([
@@ -182,7 +181,7 @@ def _build_power_controls(analysis: ElectricityAnalysis, init_vals: dict):
                         type="number",
                         value=init_vals["P3"],
                         step=0.1,
-                        style={"width": "100%", "padding": "10px"}
+                        style={"width": "100%", "padding": "10px"},
                     ),
                 ]),
                 html.Div([
@@ -192,7 +191,7 @@ def _build_power_controls(analysis: ElectricityAnalysis, init_vals: dict):
                         type="number",
                         value=init_vals["P4"],
                         step=0.1,
-                        style={"width": "100%", "padding": "10px"}
+                        style={"width": "100%", "padding": "10px"},
                     ),
                 ]),
                 html.Div([
@@ -202,7 +201,7 @@ def _build_power_controls(analysis: ElectricityAnalysis, init_vals: dict):
                         type="number",
                         value=init_vals["P5"],
                         step=0.1,
-                        style={"width": "100%", "padding": "10px"}
+                        style={"width": "100%", "padding": "10px"},
                     ),
                 ]),
                 html.Div([
@@ -212,13 +211,13 @@ def _build_power_controls(analysis: ElectricityAnalysis, init_vals: dict):
                         type="number",
                         value=init_vals["P6"],
                         step=0.1,
-                        style={"width": "100%", "padding": "10px"}
+                        style={"width": "100%", "padding": "10px"},
                     ),
                 ]),
-            ]
+            ],
         )
 
-    # 2.0TD: inputs libres, no desplegables
+    # 2.0TD: input libre, no dropdown
     return html.Div(
         style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "24px"},
         children=[
@@ -229,7 +228,7 @@ def _build_power_controls(analysis: ElectricityAnalysis, init_vals: dict):
                     type="number",
                     value=init_vals["P1"],
                     step=0.1,
-                    style={"width": "100%", "padding": "10px"}
+                    style={"width": "100%", "padding": "10px"},
                 ),
             ]),
             html.Div([
@@ -239,10 +238,10 @@ def _build_power_controls(analysis: ElectricityAnalysis, init_vals: dict):
                     type="number",
                     value=init_vals["P3"],
                     step=0.1,
-                    style={"width": "100%", "padding": "10px"}
+                    style={"width": "100%", "padding": "10px"},
                 ),
             ]),
-        ]
+        ],
     )
 
 
@@ -262,7 +261,7 @@ def build_optimization_layout(
     init_vals = _initial_power_values(
         analysis,
         contracted_p1, contracted_p2, contracted_p3,
-        contracted_p4, contracted_p5, contracted_p6
+        contracted_p4, contracted_p5, contracted_p6,
     )
 
     subtitulo = (
@@ -281,7 +280,7 @@ def build_optimization_layout(
                         html.H1("Optimización de Potencia Contratada", style=TITLE_STYLE),
                         html.P(subtitulo, style=SUBTITLE_STYLE),
                     ])
-                ]
+                ],
             ),
 
             html.Div(
@@ -289,7 +288,7 @@ def build_optimization_layout(
                 children=[
                     html.P("Potencias contratadas actuales / simuladas", style=FILTER_LABEL_STYLE),
                     _build_power_controls(analysis, init_vals),
-                ]
+                ],
             ),
 
             html.Div(style=CARD_STYLE, children=[
@@ -301,7 +300,7 @@ def build_optimization_layout(
                 html.P("Picos mensuales vs potencia contratada", style=SECTION_TITLE_STYLE),
                 html.P(
                     "Rojo = supera la potencia contratada. Azul = dentro del límite.",
-                    style={**SUBTITLE_STYLE, "marginBottom": "12px"}
+                    style={**SUBTITLE_STYLE, "marginBottom": "12px"},
                 ),
                 dcc.Graph(id="opt-picos", config={"displayModeBar": False}),
             ]),
@@ -315,7 +314,7 @@ def build_optimization_layout(
                 html.P("Opciones sugeridas", style=SECTION_TITLE_STYLE),
                 html.P(
                     "Puedes usar estas opciones como referencia y después ajustar manualmente.",
-                    style={**SUBTITLE_STYLE, "marginBottom": "12px"}
+                    style={**SUBTITLE_STYLE, "marginBottom": "12px"},
                 ),
                 dcc.Graph(id="opt-opciones", config={"displayModeBar": False}),
             ]),
@@ -323,12 +322,12 @@ def build_optimization_layout(
             html.Div(style={**CARD_STYLE, "textAlign": "center", "padding": "24px"}, children=[
                 html.P(
                     "Descarga el informe PDF con el estado actual del análisis.",
-                    style={**SUBTITLE_STYLE, "marginBottom": "16px"}
+                    style={**SUBTITLE_STYLE, "marginBottom": "16px"},
                 ),
                 html.Button("Descargar Informe PDF", id="opt-btn-download-pdf", style=BTN_PDF_STYLE),
                 dcc.Download(id="opt-download-pdf"),
             ]),
-        ]
+        ],
     )
 
 
@@ -352,18 +351,14 @@ def run_optimization_dashboard(
     app = dash.Dash(
         __name__,
         external_stylesheets=[dbc.themes.BOOTSTRAP],
-        title="Estudio Electrico — Optimización"
+        title="Estudio Electrico — Optimización",
     )
 
     app.layout = build_optimization_layout(
         analysis,
         contracted_p1, contracted_p2, contracted_p3,
-        contracted_p4, contracted_p5, contracted_p6
+        contracted_p4, contracted_p5, contracted_p6,
     )
-
-    # -----------------------------------------------------------------
-    # CALLBACK PRINCIPAL
-    # -----------------------------------------------------------------
 
     @app.callback(
         Output("opt-kpis", "figure"),
@@ -407,10 +402,6 @@ def run_optimization_dashboard(
             chart_optimization_options(data),
         )
 
-    # -----------------------------------------------------------------
-    # PDF
-    # -----------------------------------------------------------------
-
     @app.callback(
         Output("opt-download-pdf", "data"),
         Input("opt-btn-download-pdf", "n_clicks"),
@@ -420,7 +411,7 @@ def run_optimization_dashboard(
         State("opt-p4-input", "value") if es_3 else State("opt-p1-input", "value"),
         State("opt-p5-input", "value") if es_3 else State("opt-p1-input", "value"),
         State("opt-p6-input", "value") if es_3 else State("opt-p1-input", "value"),
-        prevent_initial_call=True
+        prevent_initial_call=True,
     )
     def download_pdf(n_clicks, p1, p3, p2_dummy_or_real, p4_dummy_or_real, p5_dummy_or_real, p6_dummy_or_real):
         pw = _analysis_global.power_analysis
